@@ -1,0 +1,14 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: alder
+      POSTGRES_PASSWORD: alder
+      POSTGRES_DB: alder
+    ports:
+      - "5432:5432"
+    volumes:
+      - alder-db:/var/lib/postgresql/data
+
+volumes:
+  alder-db:
