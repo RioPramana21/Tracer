@@ -3,11 +3,15 @@ package orders
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+var ErrEmptyOrder = errors.New("order must have at least one line")
+var ErrUnknownProduct = errors.New("unknown product")
 
 type Line struct {
 	ProductID int `json:"product_id"`
@@ -29,11 +33,27 @@ type Store struct {
 // Place creates an order, its lines, and a stock reservation for each line,
 // all inside one transaction.
 func (s *Store) Place(ctx context.Context, customerName string, lines []Line) (Order, error) {
+	if len(lines) == 0 {
+		return Order{}, ErrEmptyOrder
+	}
+
 	tx, err := s.Pool.Begin(ctx)
 	if err != nil {
 		return Order{}, err
 	}
 	defer tx.Rollback(ctx)
+
+	for _, line := range lines {
+		var exists bool
+		if err := tx.QueryRow(ctx,
+			`SELECT EXISTS(SELECT 1 FROM products WHERE id = $1)`, line.ProductID,
+		).Scan(&exists); err != nil {
+			return Order{}, err
+		}
+		if !exists {
+			return Order{}, ErrUnknownProduct
+		}
+	}
 
 	var o Order
 	o.CustomerName = customerName

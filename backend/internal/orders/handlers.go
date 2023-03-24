@@ -2,6 +2,7 @@ package orders
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strconv"
 
@@ -20,6 +21,10 @@ func (s *Store) HandlePlace(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	o, err := s.Place(r.Context(), req.CustomerName, req.Lines)
+	if errors.Is(err, ErrEmptyOrder) || errors.Is(err, ErrUnknownProduct) {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
