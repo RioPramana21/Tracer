@@ -17,3 +17,9 @@ func Subtotal(unitPricesCents map[int]int64, quantities map[int]int) int64 {
 func Tax(subtotalCents int64) int64 {
 	return subtotalCents * taxRateBasisPoints / 10000
 }
+
+// Discount computes a discount amount off a subtotal, given a rate in basis
+// points (1/100th of a percent). A 1500 rate is 15%.
+func Discount(subtotalCents int64, basisPoints int) int64 {
+	return subtotalCents * int64(basisPoints) / 10000
+}

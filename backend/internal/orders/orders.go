@@ -19,11 +19,12 @@ type Line struct {
 }
 
 type Order struct {
-	ID           int       `json:"id"`
-	CustomerName string    `json:"customer_name"`
-	Status       string    `json:"status"`
-	CreatedAt    time.Time `json:"created_at"`
-	Lines        []Line    `json:"lines,omitempty"`
+	ID                  int       `json:"id"`
+	CustomerName        string    `json:"customer_name"`
+	Status              string    `json:"status"`
+	DiscountBasisPoints int       `json:"discount_basis_points"`
+	CreatedAt           time.Time `json:"created_at"`
+	Lines               []Line    `json:"lines,omitempty"`
 }
 
 type Store struct {
@@ -32,7 +33,7 @@ type Store struct {
 
 // Place creates an order, its lines, and a stock reservation for each line,
 // all inside one transaction.
-func (s *Store) Place(ctx context.Context, customerName string, lines []Line) (Order, error) {
+func (s *Store) Place(ctx context.Context, customerName string, lines []Line, discountBasisPoints int) (Order, error) {
 	if len(lines) == 0 {
 		return Order{}, ErrEmptyOrder
 	}
@@ -58,11 +59,12 @@ func (s *Store) Place(ctx context.Context, customerName string, lines []Line) (O
 	var o Order
 	o.CustomerName = customerName
 	o.Status = "placed"
+	o.DiscountBasisPoints = discountBasisPoints
 	err = tx.QueryRow(ctx,
-		`INSERT INTO orders (customer_name, status) VALUES ($1, $2)
-		 RETURNING id, customer_name, status, created_at`,
-		customerName, o.Status,
-	).Scan(&o.ID, &o.CustomerName, &o.Status, &o.CreatedAt)
+		`INSERT INTO orders (customer_name, status, discount_basis_points) VALUES ($1, $2, $3)
+		 RETURNING id, customer_name, status, discount_basis_points, created_at`,
+		customerName, o.Status, o.DiscountBasisPoints,
+	).Scan(&o.ID, &o.CustomerName, &o.Status, &o.DiscountBasisPoints, &o.CreatedAt)
 	if err != nil {
 		return Order{}, err
 	}
@@ -91,7 +93,7 @@ func (s *Store) Place(ctx context.Context, customerName string, lines []Line) (O
 
 func (s *Store) List(ctx context.Context) ([]Order, error) {
 	rows, err := s.Pool.Query(ctx,
-		`SELECT id, customer_name, status, created_at FROM orders ORDER BY id`)
+		`SELECT id, customer_name, status, discount_basis_points, created_at FROM orders ORDER BY id`)
 	if err != nil {
 		return nil, err
 	}
@@ -100,7 +102,7 @@ func (s *Store) List(ctx context.Context) ([]Order, error) {
 	var out []Order
 	for rows.Next() {
 		var o Order
-		if err := rows.Scan(&o.ID, &o.CustomerName, &o.Status, &o.CreatedAt); err != nil {
+		if err := rows.Scan(&o.ID, &o.CustomerName, &o.Status, &o.DiscountBasisPoints, &o.CreatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, o)
@@ -111,8 +113,8 @@ func (s *Store) List(ctx context.Context) ([]Order, error) {
 func (s *Store) Get(ctx context.Context, id int) (Order, error) {
 	var o Order
 	err := s.Pool.QueryRow(ctx,
-		`SELECT id, customer_name, status, created_at FROM orders WHERE id = $1`, id,
-	).Scan(&o.ID, &o.CustomerName, &o.Status, &o.CreatedAt)
+		`SELECT id, customer_name, status, discount_basis_points, created_at FROM orders WHERE id = $1`, id,
+	).Scan(&o.ID, &o.CustomerName, &o.Status, &o.DiscountBasisPoints, &o.CreatedAt)
 	if err != nil {
 		return Order{}, err
 	}

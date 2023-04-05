@@ -9,11 +9,11 @@ import (
 )
 
 type Product struct {
-	ID              int       `json:"id"`
-	SKU             string    `json:"sku"`
-	Name            string    `json:"name"`
-	UnitPriceCents  int64     `json:"unit_price_cents"`
-	CreatedAt       time.Time `json:"created_at"`
+	ID             int       `json:"id"`
+	SKU            string    `json:"sku"`
+	Name           string    `json:"name"`
+	UnitPriceCents int64     `json:"unit_price_cents"`
+	CreatedAt      time.Time `json:"created_at"`
 }
 
 type Store struct {

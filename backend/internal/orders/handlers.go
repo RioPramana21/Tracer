@@ -10,8 +10,9 @@ import (
 )
 
 type placeRequest struct {
-	CustomerName string `json:"customer_name"`
-	Lines        []Line `json:"lines"`
+	CustomerName        string `json:"customer_name"`
+	Lines               []Line `json:"lines"`
+	DiscountBasisPoints int    `json:"discount_basis_points"`
 }
 
 func (s *Store) HandlePlace(w http.ResponseWriter, r *http.Request) {
@@ -20,7 +21,7 @@ func (s *Store) HandlePlace(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid body", http.StatusBadRequest)
 		return
 	}
-	o, err := s.Place(r.Context(), req.CustomerName, req.Lines)
+	o, err := s.Place(r.Context(), req.CustomerName, req.Lines, req.DiscountBasisPoints)
 	if errors.Is(err, ErrEmptyOrder) || errors.Is(err, ErrUnknownProduct) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
