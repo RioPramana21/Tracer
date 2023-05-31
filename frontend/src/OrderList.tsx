@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react"
 import { listOrders, type Order } from "./api"
 
-export function OrderList() {
+export function OrderList({ onSelect }: { onSelect: (id: number) => void }) {
   const [orders, setOrders] = useState<Order[]>([])
   const [error, setError] = useState<string | null>(null)
 
@@ -24,7 +24,7 @@ export function OrderList() {
       </thead>
       <tbody>
         {orders.map((o) => (
-          <tr key={o.id}>
+          <tr key={o.id} onClick={() => onSelect(o.id)} style={{ cursor: "pointer" }}>
             <td>#{o.id}</td>
             <td>{o.customer_name}</td>
             <td>{o.status}</td>
