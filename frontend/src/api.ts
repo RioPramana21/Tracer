@@ -40,3 +40,16 @@ export async function getInvoice(orderId: number): Promise<Invoice> {
   if (!res.ok) throw new Error("failed to load invoice")
   return res.json()
 }
+
+export type Payment = {
+  id: number
+  invoice_id: number
+  amount_cents: number
+  status: string
+}
+
+export async function getPayment(invoiceId: number): Promise<Payment> {
+  const res = await fetch(`${BASE_URL}/invoices/${invoiceId}/payment`)
+  if (!res.ok) throw new Error("failed to load payment")
+  return res.json()
+}
