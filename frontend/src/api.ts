@@ -23,8 +23,8 @@ export type Invoice = {
   total_cents: number
 }
 
-export async function listOrders(): Promise<Order[]> {
-  const res = await fetch(`${BASE_URL}/orders`)
+export async function listOrders(limit = 20, offset = 0): Promise<Order[]> {
+  const res = await fetch(`${BASE_URL}/orders?limit=${limit}&offset=${offset}`)
   if (!res.ok) throw new Error("failed to load orders")
   return res.json()
 }

@@ -34,7 +34,20 @@ func (s *Store) HandlePlace(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Store) HandleList(w http.ResponseWriter, r *http.Request) {
-	list, err := s.List(r.Context())
+	limit := 20
+	if v := r.URL.Query().Get("limit"); v != "" {
+		if parsed, err := strconv.Atoi(v); err == nil {
+			limit = parsed
+		}
+	}
+	offset := 0
+	if v := r.URL.Query().Get("offset"); v != "" {
+		if parsed, err := strconv.Atoi(v); err == nil {
+			offset = parsed
+		}
+	}
+
+	list, err := s.List(r.Context(), limit, offset)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

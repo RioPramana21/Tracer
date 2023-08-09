@@ -91,9 +91,10 @@ func (s *Store) Place(ctx context.Context, customerName string, lines []Line, di
 	return o, nil
 }
 
-func (s *Store) List(ctx context.Context) ([]Order, error) {
+func (s *Store) List(ctx context.Context, limit, offset int) ([]Order, error) {
 	rows, err := s.Pool.Query(ctx,
-		`SELECT id, customer_name, status, discount_basis_points, created_at FROM orders ORDER BY id`)
+		`SELECT id, customer_name, status, discount_basis_points, created_at
+		 FROM orders ORDER BY id LIMIT $1 OFFSET $2`, limit, offset)
 	if err != nil {
 		return nil, err
 	}

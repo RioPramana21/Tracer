@@ -1,16 +1,19 @@
 import { useEffect, useState } from "react"
 import { listOrders, type Order } from "./api"
 
+const PAGE_SIZE = 20
+
 export function OrderList({ onSelect }: { onSelect: (id: number) => void }) {
   const [orders, setOrders] = useState<Order[]>([])
   const [search, setSearch] = useState("")
+  const [page, setPage] = useState(0)
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
-    listOrders()
+    listOrders(PAGE_SIZE, page * PAGE_SIZE)
       .then(setOrders)
       .catch((e) => setError(e.message))
-  }, [])
+  }, [page])
 
   if (error) return <p>Couldn't load orders: {error}</p>
 
@@ -43,6 +46,12 @@ export function OrderList({ onSelect }: { onSelect: (id: number) => void }) {
           ))}
         </tbody>
       </table>
+      <button disabled={page === 0} onClick={() => setPage((p) => p - 1)}>
+        Previous
+      </button>
+      <button disabled={orders.length < PAGE_SIZE} onClick={() => setPage((p) => p + 1)}>
+        Next
+      </button>
     </div>
   )
 }
