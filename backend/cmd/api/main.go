@@ -10,6 +10,7 @@ import (
 	"alder.example/api/internal/invoicing"
 	"alder.example/api/internal/orders"
 	"alder.example/api/internal/payments"
+	"alder.example/api/internal/refunds"
 	"github.com/go-chi/chi/v5"
 )
 
@@ -26,6 +27,7 @@ func main() {
 	orderStore := &orders.Store{Pool: pool}
 	invoiceStore := &invoicing.Store{Pool: pool}
 	paymentStore := &payments.Store{Pool: pool}
+	refundStore := &refunds.Store{Pool: pool}
 
 	r := chi.NewRouter()
 	r.Get("/healthz", func(w http.ResponseWriter, r *http.Request) {
@@ -41,6 +43,8 @@ func main() {
 	r.Get("/orders/{id}/invoice", invoiceStore.HandleGet)
 	r.Post("/invoices/{id}/payment", paymentStore.HandleRecord)
 	r.Get("/invoices/{id}/payment", paymentStore.HandleGet)
+	r.Post("/payments/{id}/refund", refundStore.HandleIssue)
+	r.Get("/payments/{id}/refund", refundStore.HandleGet)
 
 	log.Println("alder api listening on :8080")
 	if err := http.ListenAndServe(":8080", r); err != nil {
