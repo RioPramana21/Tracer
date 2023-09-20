@@ -53,3 +53,20 @@ export async function getPayment(invoiceId: number): Promise<Payment> {
   if (!res.ok) throw new Error("failed to load payment")
   return res.json()
 }
+
+export type Refund = {
+  id: number
+  payment_id: number
+  amount_cents: number
+  reason: string
+}
+
+export async function issueRefund(paymentId: number, reason: string): Promise<Refund> {
+  const res = await fetch(`${BASE_URL}/payments/${paymentId}/refund`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ reason }),
+  })
+  if (!res.ok) throw new Error("failed to issue refund")
+  return res.json()
+}
