@@ -22,7 +22,7 @@ func (s *Store) HandlePlace(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	o, err := s.Place(r.Context(), req.CustomerName, req.Lines, req.DiscountBasisPoints)
-	if errors.Is(err, ErrEmptyOrder) || errors.Is(err, ErrUnknownProduct) {
+	if errors.Is(err, ErrEmptyOrder) || errors.Is(err, ErrUnknownProduct) || errors.Is(err, ErrMissingCustomerName) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}

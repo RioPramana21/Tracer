@@ -4,6 +4,7 @@ package orders
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -12,6 +13,7 @@ import (
 
 var ErrEmptyOrder = errors.New("order must have at least one line")
 var ErrUnknownProduct = errors.New("unknown product")
+var ErrMissingCustomerName = errors.New("customer name is required")
 
 type Line struct {
 	ProductID int `json:"product_id"`
@@ -34,6 +36,9 @@ type Store struct {
 // Place creates an order, its lines, and a stock reservation for each line,
 // all inside one transaction.
 func (s *Store) Place(ctx context.Context, customerName string, lines []Line, discountBasisPoints int) (Order, error) {
+	if strings.TrimSpace(customerName) == "" {
+		return Order{}, ErrMissingCustomerName
+	}
 	if len(lines) == 0 {
 		return Order{}, ErrEmptyOrder
 	}
