@@ -3,10 +3,14 @@ package catalog
 
 import (
 	"context"
+	"errors"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+var ErrDuplicateSKU = errors.New("a product with this SKU already exists")
 
 type Product struct {
 	ID             int       `json:"id"`
@@ -27,6 +31,10 @@ func (s *Store) Create(ctx context.Context, sku, name string, unitPriceCents int
 		 RETURNING id, sku, name, unit_price_cents, created_at`,
 		sku, name, unitPriceCents,
 	).Scan(&p.ID, &p.SKU, &p.Name, &p.UnitPriceCents, &p.CreatedAt)
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+		return Product{}, ErrDuplicateSKU
+	}
 	return p, err
 }
 

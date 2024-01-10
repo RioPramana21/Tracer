@@ -2,6 +2,7 @@ package catalog
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 )
 
@@ -18,6 +19,10 @@ func (s *Store) HandleCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p, err := s.Create(r.Context(), req.SKU, req.Name, req.UnitPriceCents)
+	if errors.Is(err, ErrDuplicateSKU) {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
