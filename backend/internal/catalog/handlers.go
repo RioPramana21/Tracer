@@ -15,16 +15,16 @@ type createRequest struct {
 func (s *Store) HandleCreate(w http.ResponseWriter, r *http.Request) {
 	var req createRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid body", http.StatusBadRequest)
+		writeError(w, http.StatusBadRequest, "invalid body")
 		return
 	}
 	p, err := s.Create(r.Context(), req.SKU, req.Name, req.UnitPriceCents)
 	if errors.Is(err, ErrDuplicateSKU) {
-		http.Error(w, err.Error(), http.StatusConflict)
+		writeError(w, http.StatusConflict, err.Error())
 		return
 	}
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusCreated, p)
@@ -33,7 +33,7 @@ func (s *Store) HandleCreate(w http.ResponseWriter, r *http.Request) {
 func (s *Store) HandleList(w http.ResponseWriter, r *http.Request) {
 	products, err := s.List(r.Context())
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, products)
@@ -43,4 +43,8 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(v)
+}
+
+func writeError(w http.ResponseWriter, status int, msg string) {
+	writeJSON(w, status, map[string]string{"error": msg})
 }

@@ -15,17 +15,17 @@ type issueRequest struct {
 func (s *Store) HandleIssue(w http.ResponseWriter, r *http.Request) {
 	paymentID, err := strconv.Atoi(chi.URLParam(r, "id"))
 	if err != nil {
-		http.Error(w, "invalid payment id", http.StatusBadRequest)
+		writeError(w, http.StatusBadRequest, "invalid payment id")
 		return
 	}
 	var req issueRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid body", http.StatusBadRequest)
+		writeError(w, http.StatusBadRequest, "invalid body")
 		return
 	}
 	refund, err := s.Issue(r.Context(), paymentID, req.Reason)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusCreated, refund)
@@ -34,12 +34,12 @@ func (s *Store) HandleIssue(w http.ResponseWriter, r *http.Request) {
 func (s *Store) HandleGet(w http.ResponseWriter, r *http.Request) {
 	paymentID, err := strconv.Atoi(chi.URLParam(r, "id"))
 	if err != nil {
-		http.Error(w, "invalid payment id", http.StatusBadRequest)
+		writeError(w, http.StatusBadRequest, "invalid payment id")
 		return
 	}
 	refund, err := s.GetByPayment(r.Context(), paymentID)
 	if err != nil {
-		http.Error(w, "not found", http.StatusNotFound)
+		writeError(w, http.StatusNotFound, "not found")
 		return
 	}
 	writeJSON(w, http.StatusOK, refund)
@@ -49,4 +49,8 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(v)
+}
+
+func writeError(w http.ResponseWriter, status int, msg string) {
+	writeJSON(w, status, map[string]string{"error": msg})
 }

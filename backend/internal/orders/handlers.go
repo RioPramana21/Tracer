@@ -18,16 +18,16 @@ type placeRequest struct {
 func (s *Store) HandlePlace(w http.ResponseWriter, r *http.Request) {
 	var req placeRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid body", http.StatusBadRequest)
+		writeError(w, http.StatusBadRequest, "invalid body")
 		return
 	}
 	o, err := s.Place(r.Context(), req.CustomerName, req.Lines, req.DiscountBasisPoints)
 	if errors.Is(err, ErrEmptyOrder) || errors.Is(err, ErrUnknownProduct) || errors.Is(err, ErrMissingCustomerName) {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusCreated, o)
@@ -49,7 +49,7 @@ func (s *Store) HandleList(w http.ResponseWriter, r *http.Request) {
 
 	list, err := s.List(r.Context(), limit, offset)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, list)
@@ -58,12 +58,12 @@ func (s *Store) HandleList(w http.ResponseWriter, r *http.Request) {
 func (s *Store) HandleGet(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.Atoi(chi.URLParam(r, "id"))
 	if err != nil {
-		http.Error(w, "invalid id", http.StatusBadRequest)
+		writeError(w, http.StatusBadRequest, "invalid id")
 		return
 	}
 	o, err := s.Get(r.Context(), id)
 	if err != nil {
-		http.Error(w, "not found", http.StatusNotFound)
+		writeError(w, http.StatusNotFound, "not found")
 		return
 	}
 	writeJSON(w, http.StatusOK, o)
@@ -73,4 +73,8 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(v)
+}
+
+func writeError(w http.ResponseWriter, status int, msg string) {
+	writeJSON(w, status, map[string]string{"error": msg})
 }
