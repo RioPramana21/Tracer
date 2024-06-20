@@ -6,14 +6,15 @@ const PAGE_SIZE = 20
 export function OrderList({ onSelect }: { onSelect: (id: number) => void }) {
   const [orders, setOrders] = useState<Order[]>([])
   const [search, setSearch] = useState("")
+  const [status, setStatus] = useState("")
   const [page, setPage] = useState(0)
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
-    listOrders(PAGE_SIZE, page * PAGE_SIZE)
+    listOrders(PAGE_SIZE, page * PAGE_SIZE, status)
       .then(setOrders)
       .catch((e) => setError(e.message))
-  }, [page])
+  }, [page, status])
 
   if (error) return <p>Couldn't load orders: {error}</p>
 
@@ -28,6 +29,16 @@ export function OrderList({ onSelect }: { onSelect: (id: number) => void }) {
         value={search}
         onChange={(e) => setSearch(e.target.value)}
       />
+      <select
+        value={status}
+        onChange={(e) => {
+          setPage(0)
+          setStatus(e.target.value)
+        }}
+      >
+        <option value="">All statuses</option>
+        <option value="placed">Placed</option>
+      </select>
       <table>
         <thead>
           <tr>

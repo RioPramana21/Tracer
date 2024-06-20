@@ -46,8 +46,9 @@ func (s *Store) HandleList(w http.ResponseWriter, r *http.Request) {
 			offset = parsed
 		}
 	}
+	status := r.URL.Query().Get("status")
 
-	list, err := s.List(r.Context(), limit, offset)
+	list, err := s.List(r.Context(), limit, offset, status)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
