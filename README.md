@@ -7,8 +7,20 @@ payment, issue refunds.
 
 ```
 docker compose up -d
-psql postgres://alder:alder@localhost:5432/alder -f backend/migrations/0001_init.sql
+for f in backend/migrations/*.sql; do
+  psql postgres://alder:alder@localhost:5432/alder -f "$f"
+done
 cd backend && go run ./cmd/api
 ```
 
 The API listens on `:8080`.
+
+In another terminal:
+
+```
+cd frontend
+npm install
+npm run dev
+```
+
+The app is served at `:5173`.
