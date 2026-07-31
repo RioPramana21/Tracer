@@ -79,7 +79,7 @@ func arm(t *testing.T, root, record string) result {
 }
 
 func settingsPath(root string) string {
-	return filepath.Join(root, ".claude", "settings.json")
+	return filepath.Join(root, ".claude", "settings.local.json")
 }
 
 func readSettings(t *testing.T, root string) map[string]any {

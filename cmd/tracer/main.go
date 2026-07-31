@@ -28,10 +28,12 @@ Exit codes:
 `
 
 func main() {
-	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
+	os.Exit(run(os.Args[1:]))
 }
 
-func run(args []string, stdout, stderr *os.File) int {
+func run(args []string) int {
+	stdout, stderr := os.Stdout, os.Stderr
+
 	if len(args) < 2 || args[0] != "boundary" {
 		fmt.Fprint(stderr, usage)
 		return 2
