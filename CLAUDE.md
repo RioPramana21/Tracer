@@ -1,5 +1,10 @@
 # Tracer
 
+## Coding standards
+
+The rubric for this repo is `.claude/standards.md`. It grades Tracer's own tooling only —
+the Playground is deliberately bad code and is governed by `CONTEXT.md` instead. See STD-008.
+
 ## Agent skills
 
 ### Issue tracker
