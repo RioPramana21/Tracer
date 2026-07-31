@@ -183,8 +183,9 @@ synonym.
 
 ## Before I open a PR
 
-1. Build/test command — **not yet established; no code exists in this repo.** Amend this line
-   the day the first package lands, and paste the output rather than asserting it.
+1. Build/test command — `test -z "$(gofmt -l .)" && go vet ./... && go test ./...`, run from
+   the repo root. Paste the output rather than asserting it. (`gofmt -l` exits 0 even when it
+   names files, so the `test -z` is what makes formatting a gate rather than a report.)
 2. `git status` — clean of anything personal.
 3. `git diff` read start to finish, by me. Anything I can't explain does not ship.
 4. `verifier` subagent over the diff against this file — **Tooling diffs only** (STD-008).

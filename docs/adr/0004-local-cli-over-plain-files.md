@@ -59,5 +59,11 @@ it now.
 - Cross-Exercise trend queries — probes by `Technique`, by `Defect surface` — must be written
   as aggregation over files rather than as SQL. At batches of eight this is cheap; a
   rebuildable SQLite index can be added later without the files changing.
+- The `Agent boundary` mechanics this ADR assumes were measured against the harness rather
+  than taken on trust. The digest scheme holds and every ordinary read path is closed, but
+  deny rules gate operations on a path and do not taint the data, and OS-level sandboxing —
+  the only thing that would — does not run on native Windows. See
+  `docs/findings/0001-agent-boundary-enforceability.md`. Whether Tracer should require WSL2
+  for Exercise work is left open there and needs its own ADR.
 - No ticket ever arrives unbidden. Exercises are summoned, which removes "unfamiliar code at
   unwelcome timing" from what Tracer trains. Accepted knowingly.

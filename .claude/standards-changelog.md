@@ -27,6 +27,22 @@ keeping — it stops the same rejected rule coming back in three weeks).
 
 ---
 
+## 2026-07-31 · pre-PR checklist item 1 · amended
+
+**Rule:** the build/test command run before opening a PR.
+**Before:** "not yet established; no code exists in this repo. Amend this line the day the
+first package lands."
+**After:** `test -z "$(gofmt -l .)" && go vet ./... && go test ./...` from the repo root.
+**Source:** Claude, working issue #3; the rubric's own placeholder asked for this amendment on
+the day the first package landed
+**Why:** issue #3 landed the first Go package (`cmd/tracer`, `internal/agentboundary`), so the
+placeholder was now the only line in the checklist that could not be followed. Written with
+`test -z` rather than a bare `gofmt -l .` because `gofmt -l` exits 0 while listing unformatted
+files — chained with `&&` it would have reported formatting problems and passed anyway.
+**Evidence:** `go.mod`, `cmd/tracer/main.go`, `internal/agentboundary/agentboundary.go`
+**Challenge:** n/a — filling a placeholder the rubric itself scheduled. Not a review criterion;
+the item sits inside the `verifier:skip` block as author process.
+
 ## 2026-07-31 · STD-011 · amended
 
 **Rule:** unchanged in substance — code naming a Tracer concept uses `CONTEXT.md`'s term.
