@@ -1,0 +1,6 @@
+# Worktrees, so parallel sessions on this repo don't show up as untracked.
+.claude/worktrees/
+
+# Built CLI, anchored at the repo root so cmd/tracer/ is still tracked.
+/tracer
+/tracer.exe

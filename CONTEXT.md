@@ -215,10 +215,16 @@ The rule governing coding agents during an open [[exercise]]: no agent reads
 named [[technique]] may be discussed too. Once an Exercise is cleared or forfeited, agents
 are unrestricted and run the [[debrief]].
 
-Enforced at the harness rather than by the agent's cooperation, so an attached agent is
-genuinely unable to read the source. It is **not** a wall: the learner owns the machine and
-can lift it. What the boundary guarantees is not that lifting is impossible but that it is
-**visible** — an Exercise worked with the boundary lifted cannot be [[clear]]ed.
+Enforced at the harness rather than by the agent's cooperation. Every ordinary read path is
+closed to an attached agent: the file tools, search, and the shell commands the harness
+resolves to a file path. It is **not** a wall, in two senses. The learner owns the machine
+and can lift it. And on a platform without OS-level sandboxing — native Windows, where this
+repo is developed — an agent that copies the file elsewhere first can still read the copy,
+because the rules gate reads of a path rather than the data behind it.
+
+What the boundary guarantees is therefore not that reading is impossible but that lifting is
+**visible** — an Exercise worked with the boundary lifted cannot be [[clear]]ed. Measured in
+`docs/findings/0001-agent-boundary-enforceability.md`.
 
 This is the same trade as [[forfeit]], and for the same reason. Tracer does not build walls
 against its own learner; it makes sure nothing is gained by climbing one quietly.
