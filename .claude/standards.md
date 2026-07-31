@@ -132,9 +132,10 @@ These hold regardless of what the surrounding code does.
 - **STD-009** `[GUARD]` **Spoilers never leak into a learner-visible surface.** A defect's
   location, the file or symbol it lives in, or the intended solution must never appear in a
   Playground commit message, a branch name, an issue or PR title, a filename, a test name, a
-  log line, or a `Ticket`. Answer keys are stored hashed, never in plaintext. Losing this is
-  unrecoverable: a spoiled exercise cannot be un-spoiled for the one person the repo exists
-  for. See ADR-0001.
+  log line, or a `Ticket`. Spoiler content lives only inside the Vault image and is legible
+  only after a `Clear` or a `Forfeit` — never in the working tree, and never in a reply to an
+  open Exercise. Losing this is unrecoverable: a spoiled exercise cannot be un-spoiled for the
+  one person the repo exists for. See ADR-0001 and ADR-0005.
 - **STD-010** `[GUARD]` **The progress record is never reachable from the Playground.** No
   shared database, schema, connection, or migration path. A seeded defect must be structurally
   incapable of corrupting the learner's history — including the `Path log` and `Time to locate`
@@ -164,8 +165,8 @@ These hold regardless of what the surrounding code does.
 
 **STD-011** `[MINE]` — code that names a Tracer concept uses the term as `CONTEXT.md` defines
 it: `Playground`, `Vault`, `Exercise`, `Bug`, `Trace`, `Ticket`, `Catalog`, `Technique`,
-`Clear`, `Forfeit`, `Debrief`, `Path log`. Package names, types, CLI verbs and test names all
-count.
+`Clear`, `Forfeit`, `Replay`, `Debrief`, `Path log`, `Location claim`, `Probes to locate`,
+`Time to locate`. Package names, types, CLI verbs and test names all count.
 
 A concept the glossary does not have is a signal, not a licence — either the wrong word is
 being invented, or the glossary has a real gap worth filling before the code hardens around a

@@ -4,7 +4,10 @@ Date: 2026-07-30
 
 ## Status
 
-Accepted
+Accepted. **The answer-key mechanism below is superseded by ADR-0005** — keys are no longer
+hashed. The one-repo/two-surfaces shape, the container, the innocent-commit requirement and the
+agent-policy layer all still stand. ADR-0005 explains why hashing could not survive the
+`Debrief`'s need to reveal.
 
 ## Context
 

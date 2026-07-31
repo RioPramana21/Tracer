@@ -29,8 +29,13 @@ separately as they are introduced.
 
 Everything that would spoil an [[exercise]]: defect specifications, answer keys, hidden
 tests, technique notes, the difficulty ramp. Colocated with the Playground but never read
-casually — keys are stored hashed and tests run from a prebuilt image, so possession does
-not imply readability.
+casually — it is held outside the working tree and reached only through tooling, so
+possession does not imply readability.
+
+The Vault is not write-only. Half of it exists to be *shown* — the intended path a
+[[debrief]] reveals is Vault content whose whole purpose is eventual disclosure. What
+governs it is therefore timing, not secrecy: nothing is legible before a [[clear]] or a
+[[forfeit]], all of it is legible after.
 
 ### Exercise
 
@@ -52,7 +57,14 @@ naming a call path, an ordering, or the specific function responsible. No repair
 involved. Trains reading a feature you are about to *extend*, not one that is broken.
 
 "Trace" never means self-assessed comprehension. If it cannot be marked wrong, it is not
-a Trace.
+a Trace. The answer is therefore an ordered sequence of named symbols rather than prose:
+prose can only be marked wrong by a judge, and a judge that can be argued with is
+self-assessment with extra steps.
+
+An answer's symbols are checked for *existence* before submission, and that check is not a
+hint — the [[playground]] is fully readable, so it tells the learner only what they could
+have confirmed themselves. It exists so that every failed Trace is a wrong answer and never
+a typo. At a low baseline those two are indistinguishable, and one of them teaches nothing.
 
 ### Ticket
 
@@ -64,6 +76,11 @@ an unstarted Exercise that exists.
 
 The fixed, ordered set of authored [[exercise]]s. Grown in small batches so that each batch
 is informed by working the previous one. Not generated on demand.
+
+Every [[technique]] recurs across more than one Exercise. This is a constraint on how a batch
+is composed, and its purpose is to make a [[forfeit]] survivable: a forfeited Exercise can
+never again measure anything, so a technique that appeared only once would be untestable the
+moment the learner got stuck on it.
 
 The Catalog is authored **chronologically**: the [[playground]] is built as a sequence of
 plausible feature commits across a simulated multi-year timeline, with defects introduced
@@ -97,7 +114,8 @@ measured along — not the count of Exercises cleared.
 ### Clear
 
 To pass an [[exercise]] on its own terms — hidden test green, or answer matching the key —
-without having forfeited. Only a Clear advances the [[reveal ramp]].
+without having forfeited, replayed, or lifted the [[agent boundary]]. Only a Clear advances
+the [[reveal ramp]].
 
 ### Forfeit
 
@@ -107,6 +125,23 @@ is offered, but the Exercise is recorded as **not cleared** and the ramp does no
 Forfeiting is a supported, dignified action, not a failure state to be avoided. Its
 purpose is to make quiet cheating unnecessary: without a Forfeit, a stuck learner corrupts
 their own record instead of leaving a mark on it.
+
+A forfeited Exercise is spent as an *instrument*, not as an *activity*: it can still be
+[[replay]]ed, but it can never again measure anything.
+
+### Replay
+
+Working an [[exercise]] again after its answer is known — normally straight after a
+[[forfeit]] and its [[debrief]], to drill the technique while the lesson is fresh.
+
+Encouraged and recorded, but never a [[clear]], and it produces no [[probes to locate]] or
+[[time to locate]]: those count the search, and there is no search once the answer is known.
+A Replay proves the learner can *execute* a known solution. Only a fresh, unseen Exercise
+proves they can *find* one.
+
+This is why the [[catalog]] is authored so that every [[technique]] recurs across several
+Exercises. The recurrence is not compensation for a spent Exercise — it is the only thing
+that can show a forfeited lesson took hold.
 
 ### Path log
 
@@ -120,19 +155,58 @@ accidentally. The Path log is also what gives a [[debrief]] something specific t
 
 Mandatory for the first batch of the [[catalog]], when the habit is either formed or lost.
 
+An entry may additionally carry a [[location claim]], which is what makes the Path log an
+instrument rather than a diary.
+
+### Location claim
+
+A [[path log]] entry that names where the learner believes the cause lives, alongside the
+"because" every entry carries. It is **recorded and never answered** — the learner is told
+nothing during the [[exercise]], and learns at [[debrief]] whether any claim was right.
+
+The silence is the point. A claim that were answered would be an oracle: locations could be
+guessed rather than reasoned to, and a confirmed hit would hand the learner a certainty that
+real debugging never supplies. Silent, a claim costs nothing and buys nothing, so the only
+reason to file one is genuine belief.
+
+Claims are unlimited, because each one costs a written justification — which is exactly the
+friction that makes hypothesis-free guessing impossible.
+
+### Probes to locate
+
+The count of [[path log]] entries filed before the first correct [[location claim]]. The
+primary measure of tracing skill, because it measures search efficiency directly and is
+contaminated by nothing — not fatigue, not interruption, not the hour of day.
+
 ### Time to locate
 
-The interval from starting an [[exercise]] to correctly identifying the defect's location —
-tracked separately from time to fix, because locating is the skill being trained.
+The elapsed interval from starting an [[exercise]] to the first correct [[location claim]],
+tracked separately from time to fix.
 
-Recorded and shown in [[debrief]]s and trends, never displayed while an Exercise is in
-progress.
+Explicitly **not** the headline number. For a learner working around a day job, elapsed time
+varies more with when they sat down than with how well they traced. It is kept as a
+*diagnostic*, for the one failure [[probes to locate]] cannot see: a low probe count paired
+with a long interval means reading without hypotheses — the untrained behaviour the Path log
+exists to prevent — rather than an efficient search.
+
+Both are recorded and shown in [[debrief]]s and trends, never displayed while an Exercise is
+in progress.
+
+On a [[bug]] both are strictly earlier than the [[clear]], and both may be absent: an
+Exercise can be cleared by a learner who repaired the defect without ever having consciously
+named where it was. Absent against a Clear is a finding about the solve, not a gap in the
+record.
 
 ### Debrief
 
 The retrospective that follows a [[clear]] or a [[forfeit]]: what the intended path was,
 which signals in the [[ticket]] should have pointed where, and where time was lost. Most
 of the learning lives here rather than in the solve.
+
+Its sharpest material is the near miss — which [[location claim]]s were close and in what way,
+not merely which were wrong. A claim naming the right file and the wrong symbol is a different
+lesson from one naming the wrong subsystem entirely, and the Debrief is where that distinction
+is drawn.
 
 ### Agent boundary
 
@@ -141,8 +215,13 @@ The rule governing coding agents during an open [[exercise]]: no agent reads
 named [[technique]] may be discussed too. Once an Exercise is cleared or forfeited, agents
 are unrestricted and run the [[debrief]].
 
-Enforced mechanically — Exercises are worked without an agent attached — rather than by
-intention alone.
+Enforced at the harness rather than by the agent's cooperation, so an attached agent is
+genuinely unable to read the source. It is **not** a wall: the learner owns the machine and
+can lift it. What the boundary guarantees is not that lifting is impossible but that it is
+**visible** — an Exercise worked with the boundary lifted cannot be [[clear]]ed.
+
+This is the same trade as [[forfeit]], and for the same reason. Tracer does not build walls
+against its own learner; it makes sure nothing is gained by climbing one quietly.
 
 ### Realistic mess
 

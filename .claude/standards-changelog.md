@@ -27,6 +27,42 @@ keeping — it stops the same rejected rule coming back in three weeks).
 
 ---
 
+## 2026-07-31 · STD-011 · amended
+
+**Rule:** unchanged in substance — code naming a Tracer concept uses `CONTEXT.md`'s term.
+**Before:** term list ended `Clear`, `Forfeit`, `Debrief`, `Path log`.
+**After:** adds `Replay`, `Location claim`, `Probes to locate`, `Time to locate`.
+**Source:** Claude, during the 2026-07-31 `/grill-with-docs` session on the exercise loop;
+accepted by Rio
+**Why:** the session added three terms to `CONTEXT.md` and made a fourth load-bearing. The
+rule's value is entirely in being cited before a package gets misnamed, and a term absent from
+the list is a term nobody will check. `Probes to locate` matters most: it is the headline
+metric and the obvious wrong name for it (`attempts`, `guesses`, `score`) is one keystroke away.
+**Evidence:** `CONTEXT.md` → *Location claim*, *Probes to locate*, *Replay*; ADR-0004
+**Challenge:** n/a — scope widening within an existing rule, no conflict with practice.
+
+## 2026-07-31 · STD-009 · amended
+
+**Rule:** unchanged in substance — spoilers never reach a learner-visible surface.
+**Before:** "Answer keys are stored hashed, never in plaintext."
+**After:** "Spoiler content lives only inside the Vault image and is legible only after a
+`Clear` or a `Forfeit` — never in the working tree, and never in a reply to an open Exercise."
+**Source:** Claude, during the 2026-07-31 `/grill-with-docs` session on the exercise loop;
+accepted by Rio
+**Why:** the hashed clause was false as a floor and unbuildable as written. A `Debrief` reveals
+the intended path and a `Forfeit` reveals it outright, so the plaintext must be *retrievable
+after the fact* — hashing is irreversible, which is exactly wrong for the half of the Vault
+that exists to be shown. Enforcing the clause literally would have required deleting the
+Debrief. The replacement keeps the same floor but names the real invariant: **timing**, not
+irreversibility. The tag stays `[GUARD]` — what is being protected did not change, only the
+mechanism that was wrongly written into the rule.
+**Evidence:** ADR-0005 (supersedes ADR-0001's answer-key mechanism); `CONTEXT.md` → *Vault*,
+*Debrief*, *Forfeit*
+**Challenge:** tier 1 (integrity of the artefact the repo exists to produce), raised before any
+code was written and resolved by amending the rule rather than working around it. The original
+clause was itself the tier-1 risk: a rule that cannot be followed gets ignored, and an ignored
+`[GUARD]` protects nothing.
+
 ## 2026-07-31 · STD-011 · added
 
 **Tag:** `[MINE]`
