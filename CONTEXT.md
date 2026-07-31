@@ -45,6 +45,21 @@ pass condition, always carries an intended technique. Comes in exactly two kinds
 
 Deliberately *not* called a "lesson" or a "challenge" — an Exercise is both at once.
 
+### Progress record
+
+The learner's history of every [[exercise]] worked, kept as plain files outside the Tracer
+repository, in a directory that is itself a git repository (ADR-0004). Shares no store,
+schema, or connection with the [[playground]] — a seeded defect must be structurally
+incapable of reaching it.
+
+### Attempt
+
+One worked instance of an [[exercise]]: a file in the [[progress record]], carrying
+structured front matter (state, timestamps, the branch it was worked on) plus prose (the
+[[path log]]). ADR-0004 calls for "one per Exercise attempt" — how a [[forfeit]] followed by
+a [[replay]] on the same Exercise is told apart from the first attempt is for the ticket
+that builds [[replay]] to decide; nothing before it produces more than one.
+
 ### Bug
 
 An [[exercise]] whose pass condition is a hidden test flipping from red to green. The
