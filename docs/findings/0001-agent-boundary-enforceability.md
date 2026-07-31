@@ -1,6 +1,12 @@
 # Finding 1 — the Agent boundary is enforceable, but not on this machine
 
-Date: 2026-07-31 · Issue: #3 · Measured against Claude Code 2.1.220, native Windows 11
+Date: 2026-07-31, re-verified 2026-08-01 · Issue: #3 · Measured against Claude Code 2.1.220,
+native Windows 11, deny rules written to `.claude/settings.local.json`
+
+The rules moved from `.claude/settings.json` to `.claude/settings.local.json` between the
+first measurement and this write-up (so arming does not dirty a tracked file on the learner's
+graded fix branch — see *What this reopens*, ADR-0006). The table below was re-run against a
+fresh fixture after the move, with a fresh canary, and came back identical.
 
 ## Question
 
@@ -66,7 +72,35 @@ Two lesser results point the same way:
 but a settings file created in a directory the session did not know at startup is not picked
 up. In the session that armed this boundary, every read above succeeded. Enforcement began
 only in a process started afterwards. Arming must therefore precede the agent session, and
-the loop has to say so.
+the loop has to say so — the CLI's own `arm` output now carries this caveat rather than
+leaving it only in this document.
+
+**Detection is sampled, not continuous.** The digest is only ever re-derived when `verify`
+runs. An edit made and then undone entirely between two `verify` calls — remove a rule, read
+the source, restore the exact rule text, then verify — leaves no trace: the settings file is
+byte-for-byte what it was, so nothing to detect ever existed. This is not a bug in the digest
+scheme; it is what "tamper-evident by hashing a file" can promise and no more. Catching an
+edit that does not survive to the next sample would need continuous monitoring — a file
+watcher running for the life of the Exercise — which is a different, heavier mechanism this
+ticket does not build.
+
+## A scope decision this finding drove
+
+The acceptance criterion asks for deny rules "over `Playground` paths". The shipped rule set
+is wider than that in two places, and both are a direct consequence of the measurements above
+rather than scope creep:
+
+- The `git show` / `git cat-file` / `git diff` / `git log -p` / `git stash show` / `git grep`
+  denials are repo-wide, because git reads content by ref rather than by working-tree path —
+  there is no path for a `Read` rule to match, so the alternative to a whole-tool denial is no
+  denial at all.
+- `PowerShell` is denied whole rather than by cmdlet, because `Read` rules do not cover
+  PowerShell's own file cmdlets and enumerating them is exactly the arms race the *"no
+  quantity of additional patterns closes it"* result above argues cannot be won by more rules.
+
+Both trade an attached agent's ability to read the learner's own fix diff or run PowerShell —
+for the life of an armed Exercise only — against STD-009's floor that a spoiled Exercise
+cannot be un-spoiled. Recorded here as a decision, not left implicit in a code comment.
 
 ## The structural fix, and why it is unavailable here
 

@@ -170,15 +170,22 @@ func TestArmRecordsADigestOfTheSettingsCarryingTheRules(t *testing.T) {
 	}
 }
 
-func TestArmLeavesUnrelatedSettingsAlone(t *testing.T) {
-	root, record := checkout(t)
+// checkoutWithSettings is a checkout that already carries settings unrelated
+// to the boundary, so tests can assert arming or disarming leaves them alone.
+func checkoutWithSettings(t *testing.T, existing string) (root, record string) {
+	t.Helper()
+	root, record = checkout(t)
 	if err := os.MkdirAll(filepath.Dir(settingsPath(root)), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	existing := `{"model":"opus","permissions":{"deny":["Bash(rm -rf *)"]}}`
 	if err := os.WriteFile(settingsPath(root), []byte(existing), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	return root, record
+}
+
+func TestArmLeavesUnrelatedSettingsAlone(t *testing.T) {
+	root, record := checkoutWithSettings(t, `{"model":"opus","permissions":{"deny":["Bash(rm -rf *)"]}}`)
 
 	arm(t, root, record)
 
@@ -261,6 +268,78 @@ func TestVerifyDistinguishesNeverArmedFromLifted(t *testing.T) {
 	}
 }
 
+func TestVerifyIgnoresAnUnrelatedSettingAddedAfterArming(t *testing.T) {
+	root, record := checkout(t)
+	arm(t, root, record)
+	settings := readSettings(t, root)
+	settings["outputStyle"] = "concise"
+	settings["permissions"].(map[string]any)["allow"] = []any{"Bash(go test *)"}
+	edited, err := json.Marshal(settings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(settingsPath(root), edited, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got := runTracer(t, "boundary", "verify", "--checkout", root, "--record", record)
+
+	if got.code != 0 {
+		t.Errorf("verify exited %d over an unrelated settings addition; output %s%s", got.code, got.stdout, got.stderr)
+	}
+	if !strings.Contains(got.stdout, "intact") {
+		t.Errorf("verify said %q, want it to still report an intact boundary", got.stdout)
+	}
+}
+
+func editDenyRules(t *testing.T, root string, deny []string) {
+	t.Helper()
+	settings := readSettings(t, root)
+	settings["permissions"] = map[string]any{"deny": deny}
+	edited, err := json.Marshal(settings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(settingsPath(root), edited, 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestVerifyKeepsALiftedRecordAcrossARearm(t *testing.T) {
+	root, record := checkout(t)
+	arm(t, root, record)
+	editDenyRules(t, root, []string{"Read(/nothing/**)"})
+	if got := runTracer(t, "boundary", "verify", "--checkout", root, "--record", record); got.code == 0 {
+		t.Fatalf("sanity check failed: verify did not observe the lift; output %s%s", got.stdout, got.stderr)
+	}
+
+	arm(t, root, record) // restores every rule the boundary armed
+
+	got := runTracer(t, "boundary", "verify", "--checkout", root, "--record", record)
+	if got.code == 0 {
+		t.Errorf("re-arming a lifted boundary produced a clean record; output %s%s", got.stdout, got.stderr)
+	}
+	if !strings.Contains(got.stdout, "lifted") {
+		t.Errorf("verify said %q after a re-arm, want it to still report the earlier lift", got.stdout)
+	}
+}
+
+func TestArmObservesALiftEvenWithoutAnInterveningVerify(t *testing.T) {
+	root, record := checkout(t)
+	arm(t, root, record)
+	editDenyRules(t, root, []string{"Read(/nothing/**)"})
+
+	arm(t, root, record) // no verify call between the edit and this re-arm
+
+	got := runTracer(t, "boundary", "verify", "--checkout", root, "--record", record)
+	if got.code == 0 {
+		t.Errorf("re-arming after an unverified lift produced a clean record; output %s%s", got.stdout, got.stderr)
+	}
+	if !strings.Contains(got.stdout, "lifted") {
+		t.Errorf("verify said %q, want arm to have already caught the lift itself", got.stdout)
+	}
+}
+
 func TestDisarmRemovesTheRules(t *testing.T) {
 	root, record := checkout(t)
 	arm(t, root, record)
@@ -279,14 +358,7 @@ func TestDisarmRemovesTheRules(t *testing.T) {
 }
 
 func TestDisarmKeepsUnrelatedSettings(t *testing.T) {
-	root, record := checkout(t)
-	if err := os.MkdirAll(filepath.Dir(settingsPath(root)), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	existing := `{"model":"opus","permissions":{"deny":["Bash(rm -rf *)"]}}`
-	if err := os.WriteFile(settingsPath(root), []byte(existing), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	root, record := checkoutWithSettings(t, `{"model":"opus","permissions":{"deny":["Bash(rm -rf *)"]}}`)
 	arm(t, root, record)
 
 	if got := runTracer(t, "boundary", "disarm", "--checkout", root, "--record", record); got.code != 0 {

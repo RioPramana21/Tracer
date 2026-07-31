@@ -64,6 +64,8 @@ func run(args []string) int {
 		fmt.Fprintf(stdout, "Agent boundary armed over %d rules\n", len(record.Rules))
 		fmt.Fprintf(stdout, "  settings: %s\n", record.Settings)
 		fmt.Fprintf(stdout, "  digest:   %s\n", record.Digest)
+		fmt.Fprintln(stdout, "  note:     an agent session already running against this checkout")
+		fmt.Fprintln(stdout, "            does not pick this up — start or restart the session first")
 		return 0
 
 	case "verify":

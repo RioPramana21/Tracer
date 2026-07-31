@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"time"
@@ -144,7 +145,7 @@ func (b Boundary) Arm() (Record, error) {
 	if err != nil {
 		return Record{}, err
 	}
-	deny, err := denyRules(settings)
+	deny, err := settingsDeny(settings)
 	if err != nil {
 		return Record{}, err
 	}
@@ -160,14 +161,55 @@ func (b Boundary) Arm() (Record, error) {
 		return Record{}, err
 	}
 
+	if err := excludeFromGit(b.CheckoutRoot, settingsRelPath); err != nil {
+		return Record{}, err
+	}
+
+	rules := slices.Clone(DenyRules)
 	record := Record{
 		ArmedAt:  time.Now().UTC(),
 		LiftedAt: liftedAt,
 		Settings: settingsPath,
-		Digest:   boundaryDigest(deny),
-		Rules:    slices.Clone(DenyRules),
+		Digest:   boundaryDigest(rules, deny),
+		Rules:    rules,
 	}
 	return record, b.writeRecord(record)
+}
+
+// excludeFromGit keeps relPath out of `git status` for the checkout at root,
+// via .git/info/exclude rather than a tracked .gitignore. ADR-0006/STD-010's
+// promise that the checkout is preserved for review (issue #1 stories 42-43)
+// is undermined if arming's own settings file shows up as untracked noise
+// next to the learner's actual fix. Best-effort: a checkout that is not a git
+// repository, or one whose .git is a worktree file rather than a directory,
+// is left alone rather than failed over.
+func excludeFromGit(root, relPath string) error {
+	excludePath := filepath.Join(root, ".git", "info", "exclude")
+	if _, err := os.Stat(filepath.Join(root, ".git")); err != nil {
+		return nil
+	}
+	line := filepath.ToSlash(relPath)
+
+	existing, err := os.ReadFile(excludePath)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	for already := range strings.SplitSeq(string(existing), "\n") {
+		if strings.TrimSpace(already) == line {
+			return nil
+		}
+	}
+
+	if err := os.MkdirAll(filepath.Dir(excludePath), 0o755); err != nil {
+		return nil
+	}
+	f, err := os.OpenFile(excludePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return nil
+	}
+	defer f.Close()
+	_, _ = f.WriteString(line + "\n")
+	return nil
 }
 
 // liftCarriedForward reports the lift stamp a new record must inherit: an
@@ -226,12 +268,18 @@ func (b Boundary) Verify() (Status, error) {
 
 // evaluate compares the checkout's current rules against the record, without
 // consulting or updating the lift stamp.
+//
+// The digest is re-derived from record.Rules — the rule set that was actually
+// armed — rather than from the package's current DenyRules. A later tracer
+// build that adds or rewords a rule must not retroactively lift every
+// already-armed checkout in the world; only an edit to the settings file
+// this checkout was armed with does that.
 func (b Boundary) evaluate(record Record) (Status, error) {
 	settingsPath, err := b.absSettingsPath()
 	if err != nil {
 		return "", err
 	}
-	if record.Settings != settingsPath {
+	if !samePath(record.Settings, settingsPath) {
 		return "", fmt.Errorf(
 			"record at %s was armed over %s, not over this checkout's %s",
 			b.RecordPath, record.Settings, settingsPath)
@@ -241,25 +289,36 @@ func (b Boundary) evaluate(record Record) (Status, error) {
 	if err != nil {
 		return "", err
 	}
-	deny, err := denyRules(settings)
+	deny, err := settingsDeny(settings)
 	if err != nil {
 		return "", err
 	}
-	if boundaryDigest(deny) != record.Digest {
+	if boundaryDigest(record.Rules, deny) != record.Digest {
 		return Lifted, nil
 	}
 	return Intact, nil
 }
 
-// boundaryDigest digests the boundary's own rules as they currently stand in
-// the settings, in a fixed order, rather than the whole settings file. A rule
-// removed or altered changes the digest; an unrelated setting added alongside
-// does not. Digesting the file would be simpler and would report Lifted for an
-// edit that never touched the boundary — and since a lift forecloses a Clear,
-// that false positive costs the learner an Exercise they earned.
-func boundaryDigest(deny []string) string {
-	present := make([]string, 0, len(DenyRules))
-	for _, rule := range DenyRules {
+// samePath compares two settings paths the way the filesystem they live on
+// would: exact on POSIX, case-insensitively on Windows, where the same path
+// can be spelled with a different drive-letter case.
+func samePath(a, b string) bool {
+	if runtime.GOOS == "windows" {
+		return strings.EqualFold(a, b)
+	}
+	return a == b
+}
+
+// boundaryDigest digests which rules in ruleset are present in deny, in
+// ruleset's fixed order, rather than the whole settings file. A rule removed
+// or altered from ruleset changes the digest; an unrelated setting added
+// alongside does not. Digesting the file would be simpler and would report
+// Lifted for an edit that never touched the boundary — and since a lift
+// forecloses a Clear, that false positive costs the learner an Exercise they
+// earned.
+func boundaryDigest(ruleset, deny []string) string {
+	present := make([]string, 0, len(ruleset))
+	for _, rule := range ruleset {
 		if slices.Contains(deny, rule) {
 			present = append(present, rule)
 		}
@@ -269,12 +328,21 @@ func boundaryDigest(deny []string) string {
 
 // Disarm removes the rules and the digest record, leaving any settings the
 // checkout already carried untouched.
+//
+// Disarm does not itself decide whether the Exercise it closes may be a
+// Clear — it discards the record, including any stamped LiftedAt, so a
+// caller that needs the verdict must Verify before calling Disarm.
 func (b Boundary) Disarm() error {
-	settings, err := loadSettings(b.SettingsPath())
+	settingsPath, err := b.absSettingsPath()
 	if err != nil {
 		return err
 	}
-	deny, err := denyRules(settings)
+
+	settings, err := loadSettings(settingsPath)
+	if err != nil {
+		return err
+	}
+	deny, err := settingsDeny(settings)
 	if err != nil {
 		return err
 	}
@@ -289,13 +357,13 @@ func (b Boundary) Disarm() error {
 	}
 
 	if len(settings) == 0 {
-		if err := removeIfExists(b.SettingsPath()); err != nil {
+		if err := removeIfExists(settingsPath); err != nil {
 			return err
 		}
 		// Only tidies away a directory arming created; a non-empty one fails
 		// and is ignored.
-		os.Remove(filepath.Dir(b.SettingsPath()))
-	} else if err := writeSettings(b.SettingsPath(), settings); err != nil {
+		os.Remove(filepath.Dir(settingsPath))
+	} else if err := writeSettings(settingsPath, settings); err != nil {
 		return err
 	}
 	return removeIfExists(b.RecordPath)
@@ -320,7 +388,10 @@ func loadSettings(path string) (settings, error) {
 	return doc, nil
 }
 
-func denyRules(doc settings) ([]string, error) {
+// settingsDeny extracts the deny array from any settings document — as
+// distinct from DenyRules, the fixed set this package's boundary contributes
+// to it.
+func settingsDeny(doc settings) ([]string, error) {
 	permissions, err := permissionsOf(doc)
 	if err != nil {
 		return nil, err
