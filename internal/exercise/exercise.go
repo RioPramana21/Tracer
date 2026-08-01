@@ -111,9 +111,9 @@ func (l Loop) Next() (catalog.Entry, bool, error) {
 // ErrCatalogExhausted if there is no next Exercise to start — both checked
 // before anything is cloned or armed, so a refusal leaves no partial state.
 func (l Loop) Start(playgroundSrc, checkoutDir string) (record.Attempt, agentboundary.Record, error) {
-	if _, open, err := l.Record.Open(); err != nil {
+	if _, active, err := l.Record.OpenOrReplaying(); err != nil {
 		return record.Attempt{}, agentboundary.Record{}, err
-	} else if open {
+	} else if active {
 		return record.Attempt{}, agentboundary.Record{}, ErrAlreadyOpen
 	}
 
@@ -167,9 +167,9 @@ func (l Loop) Start(playgroundSrc, checkoutDir string) (record.Attempt, agentbou
 	return attempt, armed, nil
 }
 
-// Status returns the open Attempt, if any.
+// Status returns the currently active Attempt — Open or Replaying — if any.
 func (l Loop) Status() (record.Attempt, bool, error) {
-	return l.Record.Open()
+	return l.Record.OpenOrReplaying()
 }
 
 // Submit grades the open Exercise's fix branch against grader and records
@@ -178,16 +178,21 @@ func (l Loop) Status() (record.Attempt, bool, error) {
 // Every other outcome leaves the Exercise open, so submitting again costs
 // nothing (issue #6: "submitting repeatedly costs nothing").
 //
-// Refuses with ErrNoExerciseOpen if no Exercise is open, and with
-// ErrWrongBranch if the checkout has moved off the Exercise's fix branch —
-// grading whatever tree happens to be checked out, rather than the fix
-// branch a Clear is supposed to mean, is refused rather than silently done.
+// Refuses with ErrNoExerciseOpen if no Exercise is active — open or
+// Replaying — and with ErrWrongBranch if the checkout has moved off the
+// Exercise's fix branch — grading whatever tree happens to be checked out,
+// rather than the fix branch a Clear is supposed to mean, is refused rather
+// than silently done.
+//
+// A Passed grade against a Replaying Attempt is graded the same way but
+// never recorded as a Clear (issue #9's acceptance criteria) — Store's
+// AppendReplaySubmission, rather than AppendSubmission, makes that decision.
 func (l Loop) Submit(grader Grader) (SubmitResult, error) {
-	attempt, open, err := l.Record.Open()
+	attempt, active, err := l.Record.OpenOrReplaying()
 	if err != nil {
 		return SubmitResult{}, err
 	}
-	if !open {
+	if !active {
 		return SubmitResult{}, ErrNoExerciseOpen
 	}
 
@@ -214,12 +219,17 @@ func (l Loop) Submit(grader Grader) (SubmitResult, error) {
 		return SubmitResult{}, fmt.Errorf("grading the submission: %w", err)
 	}
 
-	cleared, err := l.Record.AppendSubmission(attempt.ExerciseID, record.Submission{
-		Passed:   verdict.Passed,
-		Boundary: status,
-	})
-	if err != nil {
-		return SubmitResult{}, err
+	sub := record.Submission{Passed: verdict.Passed, Boundary: status}
+	var cleared bool
+	if attempt.State == record.StateReplaying {
+		if err := l.Record.AppendReplaySubmission(attempt.ExerciseID, sub); err != nil {
+			return SubmitResult{}, err
+		}
+	} else {
+		cleared, err = l.Record.AppendSubmission(attempt.ExerciseID, sub)
+		if err != nil {
+			return SubmitResult{}, err
+		}
 	}
 
 	return SubmitResult{Passed: verdict.Passed, Cleared: cleared, Boundary: status}, nil
@@ -245,6 +255,39 @@ func (l Loop) Forfeit() (record.Attempt, error) {
 	}
 	attempt.State = record.StateForfeited
 	return attempt, nil
+}
+
+// Replay reopens exerciseID's Forfeited Attempt to drill its Technique while
+// the Debrief is fresh (CONTEXT.md's Replay entry): the Playground checkout's
+// fix branch resets to the Exercise's baseline, and a new Attempt — distinct
+// from the Forfeited one it drills — records the Replay. The Forfeited
+// Attempt's own file, and therefore its Debrief, is never written to (issue
+// #9's acceptance criteria).
+//
+// Refuses with ErrAlreadyOpen if an Exercise or another Replay is already
+// active, and with record.ErrNotForfeited if exerciseID's Attempt did not end
+// in a Forfeit.
+func (l Loop) Replay(exerciseID string) (record.Attempt, error) {
+	if _, active, err := l.Record.OpenOrReplaying(); err != nil {
+		return record.Attempt{}, err
+	} else if active {
+		return record.Attempt{}, ErrAlreadyOpen
+	}
+
+	forfeited, err := l.Record.Get(exerciseID)
+	if err != nil {
+		return record.Attempt{}, err
+	}
+	if forfeited.State != record.StateForfeited {
+		return record.Attempt{}, fmt.Errorf("%w: %s is recorded as %s", record.ErrNotForfeited, exerciseID, forfeited.State)
+	}
+
+	playgroundDir := filepath.Join(forfeited.Checkout, "Playground")
+	if err := gitrepo.ResetBranch(playgroundDir, forfeited.Branch, forfeited.Baseline); err != nil {
+		return record.Attempt{}, fmt.Errorf("resetting the fix branch to the baseline: %w", err)
+	}
+
+	return l.Record.NewReplay(exerciseID)
 }
 
 // Debrief judges exerciseID's filed Location claims against debriefer and

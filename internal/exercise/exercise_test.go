@@ -456,6 +456,177 @@ func TestDebriefReportsProbesAndTimeToLocateAgainstTheFirstCorrectClaim(t *testi
 	}
 }
 
+func TestReplayResetsTheFixBranchToTheBaseline(t *testing.T) {
+	loop, attempt := startedLoop(t)
+	playgroundDir := filepath.Join(attempt.Checkout, "Playground")
+	if err := os.WriteFile(filepath.Join(playgroundDir, "app.go"), []byte("package main\n\n// a fix attempt\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, playgroundDir, "add", "-A")
+	runGit(t, playgroundDir, "-c", "user.name=fixture", "-c", "user.email=fixture@localhost",
+		"commit", "-m", "an attempted fix")
+	if _, err := loop.Forfeit(); err != nil {
+		t.Fatalf("Forfeit: %v", err)
+	}
+
+	replay, err := loop.Replay(attempt.ExerciseID)
+	if err != nil {
+		t.Fatalf("Replay: %v", err)
+	}
+
+	head := strings.TrimSpace(runGitOutput(t, playgroundDir, "rev-parse", "HEAD"))
+	if head != attempt.Baseline {
+		t.Errorf("fix branch HEAD after Replay is %q, want the baseline %q", head, attempt.Baseline)
+	}
+	branch := strings.TrimSpace(runGitOutput(t, playgroundDir, "rev-parse", "--abbrev-ref", "HEAD"))
+	if branch != attempt.Branch {
+		t.Errorf("Replay left the checkout on branch %q, want %q", branch, attempt.Branch)
+	}
+	if replay.State != record.StateReplaying {
+		t.Errorf("Replay attempt State = %q, want %q", replay.State, record.StateReplaying)
+	}
+}
+
+func TestReplayNeverTouchesTheForfeitedAttemptsOwnFile(t *testing.T) {
+	loop, attempt := startedLoop(t)
+	if _, err := loop.Record.AppendEntry(attempt.ExerciseID, record.PathLogEntry{
+		Hypothesis: "a guess", Because: "a reason", Location: "internal/billing/retry",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loop.Forfeit(); err != nil {
+		t.Fatalf("Forfeit: %v", err)
+	}
+	beforeReplay, err := loop.Record.Get(attempt.ExerciseID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := loop.Replay(attempt.ExerciseID); err != nil {
+		t.Fatalf("Replay: %v", err)
+	}
+
+	afterReplay, err := loop.Record.Get(attempt.ExerciseID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if afterReplay.State != record.StateForfeited {
+		t.Errorf("the Forfeited attempt's own State changed to %q after a Replay", afterReplay.State)
+	}
+	if afterReplay != beforeReplay {
+		t.Errorf("Replay altered the Forfeited attempt: before %+v, after %+v", beforeReplay, afterReplay)
+	}
+
+	debriefer := &fakeDebriefer{}
+	if _, err := loop.Debrief(attempt.ExerciseID, debriefer); err != nil {
+		t.Fatalf("Debrief: %v", err)
+	}
+	if len(debriefer.gotClaims) != 1 {
+		t.Errorf("the Forfeited attempt's Debrief sees %d claims after a Replay, want 1 — unchanged", len(debriefer.gotClaims))
+	}
+}
+
+func TestReplaySubmissionNeverRecordsAClearEvenWhenPassed(t *testing.T) {
+	loop, attempt := startedLoop(t)
+	if _, err := loop.Forfeit(); err != nil {
+		t.Fatalf("Forfeit: %v", err)
+	}
+	if _, err := loop.Replay(attempt.ExerciseID); err != nil {
+		t.Fatalf("Replay: %v", err)
+	}
+
+	result, err := loop.Submit(fakeGrader{passed: true})
+	if err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+
+	if !result.Passed {
+		t.Error("result.Passed = false, want true — the hidden test itself passed")
+	}
+	if result.Cleared {
+		t.Error("result.Cleared = true, want false — a Replay must never record a Clear")
+	}
+}
+
+func TestReplayProducesNoProbesToLocateBecausePathLogRefusesDuringIt(t *testing.T) {
+	loop, attempt := startedLoop(t)
+	if _, err := loop.Forfeit(); err != nil {
+		t.Fatalf("Forfeit: %v", err)
+	}
+	if _, err := loop.Replay(attempt.ExerciseID); err != nil {
+		t.Fatalf("Replay: %v", err)
+	}
+
+	// Store.Open only ever returns a StateOpen Attempt; a Replay's is
+	// StateReplaying, so there is structurally no Attempt to file a Path log
+	// entry — and therefore a Location claim — against while replaying
+	// (issue #9: "there is no search once the answer is known").
+	if _, open, err := loop.Record.Open(); err != nil {
+		t.Fatal(err)
+	} else if open {
+		t.Error("Store.Open reports an open Attempt during a Replay — Path log filing should be structurally unavailable")
+	}
+}
+
+func TestReplayRefusesWhenTheExerciseWasNotForfeited(t *testing.T) {
+	loop, attempt := startedLoop(t)
+	if _, err := loop.Submit(fakeGrader{passed: true}); err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+
+	_, err := loop.Replay(attempt.ExerciseID)
+
+	if !errors.Is(err, record.ErrNotForfeited) {
+		t.Errorf("Replay err = %v, want record.ErrNotForfeited", err)
+	}
+}
+
+func TestReplayRefusesWhenAnExerciseIsAlreadyActive(t *testing.T) {
+	loop, attempt := startedLoop(t)
+	if _, err := loop.Forfeit(); err != nil {
+		t.Fatalf("Forfeit: %v", err)
+	}
+	if _, err := loop.Replay(attempt.ExerciseID); err != nil {
+		t.Fatalf("first Replay: %v", err)
+	}
+
+	_, err := loop.Replay(attempt.ExerciseID)
+
+	if !errors.Is(err, ErrAlreadyOpen) {
+		t.Errorf("second Replay err = %v, want ErrAlreadyOpen", err)
+	}
+}
+
+func TestStartRefusesWhileAReplayIsActive(t *testing.T) {
+	playground, baseline := initPlayground(t)
+	catalogPath := writeCatalog(t,
+		catalog.Entry{ID: "bug-001", Ticket: "The nightly export file is empty three days out of five.", Baseline: baseline},
+		catalog.Entry{ID: "bug-002", Ticket: "The dashboard totals stop updating after lunchtime.", Baseline: baseline},
+	)
+	recordDir := filepath.Join(t.TempDir(), "record")
+	checkoutDir := filepath.Join(t.TempDir(), "checkout")
+	loop, err := Load(catalogPath, recordDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	attempt, _, err := loop.Start(playground, checkoutDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loop.Forfeit(); err != nil {
+		t.Fatalf("Forfeit: %v", err)
+	}
+	if _, err := loop.Replay(attempt.ExerciseID); err != nil {
+		t.Fatalf("Replay: %v", err)
+	}
+
+	_, _, err = loop.Start(playground, filepath.Join(t.TempDir(), "checkout2"))
+
+	if !errors.Is(err, ErrAlreadyOpen) {
+		t.Errorf("Start err = %v, want ErrAlreadyOpen while a Replay is active", err)
+	}
+}
+
 func TestDebriefReportsNoProbesOrTimeToLocateWithoutACorrectClaim(t *testing.T) {
 	loop, attempt := startedLoop(t)
 	if _, err := loop.Record.AppendEntry(attempt.ExerciseID, record.PathLogEntry{
