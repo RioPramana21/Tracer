@@ -29,6 +29,27 @@ func (f fakeGrader) Grade(tree string) (vault.Verdict, error) {
 	return vault.Verdict{Passed: f.passed}, nil
 }
 
+// fakeDebriefer records the closed flag and claims it was called with, and
+// returns a canned Debrief. Real gating — refusing an open Exercise before
+// Docker ever runs — is vault.Client's own job, covered by
+// internal/vault's tests; this fake exists to prove exercise.Loop.Debrief
+// passes the right closed flag and claims through to it (issue #1's
+// testing decisions: every other test substitutes a fake at the Vault
+// boundary).
+type fakeDebriefer struct {
+	gotClosed bool
+	gotClaims []vault.Claim
+}
+
+func (f *fakeDebriefer) Debrief(closed bool, claims []vault.Claim) (vault.Debrief, error) {
+	f.gotClosed = closed
+	f.gotClaims = claims
+	if !closed {
+		return vault.Debrief{}, vault.ErrExerciseOpen
+	}
+	return vault.Debrief{IntendedPath: "the intended path", TicketSignals: "the signal"}, nil
+}
+
 func runGit(t *testing.T, dir string, args ...string) {
 	t.Helper()
 	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
@@ -269,5 +290,124 @@ func TestSubmitRefusesWhenTheCheckoutIsNotOnTheFixBranch(t *testing.T) {
 		t.Fatal(err)
 	} else if !open {
 		t.Error("a wrong-branch submission closed the Exercise — it should stay open")
+	}
+}
+
+func TestForfeitClosesTheOpenExerciseAsNotCleared(t *testing.T) {
+	loop, attempt := startedLoop(t)
+
+	forfeited, err := loop.Forfeit()
+	if err != nil {
+		t.Fatalf("Forfeit: %v", err)
+	}
+	if forfeited.ExerciseID != attempt.ExerciseID {
+		t.Errorf("Forfeit closed %q, want %q", forfeited.ExerciseID, attempt.ExerciseID)
+	}
+	if forfeited.State != record.StateForfeited {
+		t.Errorf("Forfeit left State %q, want %q", forfeited.State, record.StateForfeited)
+	}
+
+	if _, open, err := loop.Record.Open(); err != nil {
+		t.Fatal(err)
+	} else if open {
+		t.Error("an Exercise is still reported open after a Forfeit")
+	}
+
+	closed, err := loop.Record.Get(attempt.ExerciseID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if closed.State != record.StateForfeited {
+		t.Errorf("the recorded Attempt State is %q, want %q", closed.State, record.StateForfeited)
+	}
+}
+
+func TestForfeitStopsTheElapsedClock(t *testing.T) {
+	loop, attempt := startedLoop(t)
+
+	if _, err := loop.Forfeit(); err != nil {
+		t.Fatalf("Forfeit: %v", err)
+	}
+
+	worked, running := attemptClockFields(t, loop.Record.Dir, attempt.ExerciseID)
+	if running {
+		t.Error("the clock is still recorded as running after a Forfeit")
+	}
+	if worked <= 0 {
+		t.Error("no worked interval was recorded across the Forfeit")
+	}
+}
+
+func TestForfeitRefusesWhenNoExerciseIsOpen(t *testing.T) {
+	loop := Loop{Record: record.Store{Dir: filepath.Join(t.TempDir(), "record")}}
+
+	_, err := loop.Forfeit()
+
+	if !errors.Is(err, ErrNoExerciseOpen) {
+		t.Errorf("Forfeit err = %v, want ErrNoExerciseOpen", err)
+	}
+}
+
+func TestDebriefPassesTheClosedStateAndFiledClaimsToTheDebriefer(t *testing.T) {
+	loop, attempt := startedLoop(t)
+	if _, err := loop.Record.AppendEntry(attempt.ExerciseID, record.PathLogEntry{
+		Hypothesis: "a guess", Because: "a reason", Location: "internal/billing/retry",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loop.Record.AppendEntry(attempt.ExerciseID, record.PathLogEntry{
+		Hypothesis: "no claim here", Because: "just a hunch",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loop.Forfeit(); err != nil {
+		t.Fatalf("Forfeit: %v", err)
+	}
+
+	debriefer := &fakeDebriefer{}
+	if _, err := loop.Debrief(attempt.ExerciseID, debriefer); err != nil {
+		t.Fatalf("Debrief: %v", err)
+	}
+
+	if !debriefer.gotClosed {
+		t.Error("Debrief passed closed=false for a Forfeited Exercise")
+	}
+	if len(debriefer.gotClaims) != 1 {
+		t.Fatalf("Debrief passed %d claims, want 1 (only the entry carrying a Location claim)", len(debriefer.gotClaims))
+	}
+	if debriefer.gotClaims[0].Location != "internal/billing/retry" {
+		t.Errorf("claim location = %q, want %q", debriefer.gotClaims[0].Location, "internal/billing/retry")
+	}
+	if debriefer.gotClaims[0].ProbeIndex != 1 {
+		t.Errorf("claim probe index = %d, want 1", debriefer.gotClaims[0].ProbeIndex)
+	}
+}
+
+func TestDebriefPassesClosedFalseForAnOpenExercise(t *testing.T) {
+	loop, attempt := startedLoop(t)
+
+	debriefer := &fakeDebriefer{}
+	_, err := loop.Debrief(attempt.ExerciseID, debriefer)
+
+	if !errors.Is(err, vault.ErrExerciseOpen) {
+		t.Errorf("Debrief err = %v, want vault.ErrExerciseOpen — the refusal is the Debriefer's own, not a check Loop.Debrief short-circuits before calling it", err)
+	}
+	if debriefer.gotClosed {
+		t.Error("Debrief passed closed=true for an open Exercise")
+	}
+}
+
+func TestDebriefAfterAClearReportsClosedTrue(t *testing.T) {
+	loop, attempt := startedLoop(t)
+	if _, err := loop.Submit(fakeGrader{passed: true}); err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+
+	debriefer := &fakeDebriefer{}
+	if _, err := loop.Debrief(attempt.ExerciseID, debriefer); err != nil {
+		t.Fatalf("Debrief: %v", err)
+	}
+	if !debriefer.gotClosed {
+		t.Error("Debrief passed closed=false for a Cleared Exercise")
 	}
 }

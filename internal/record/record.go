@@ -19,20 +19,20 @@ import (
 	"github.com/RioPramana21/Tracer/internal/gitrepo"
 )
 
-// State is where an Attempt stands. StateOpen and StateCleared are reachable
-// in this slice; Forfeit and Replay (#8, #9) add the rest.
+// State is where an Attempt stands. Replay (#9) adds the rest.
 type State string
 
 // StateOpen means the Exercise is being worked and has not yet closed.
 const StateOpen State = "open"
 
 // StateCleared means a Submission passed the hidden test with the Agent
-// boundary intact. It is the only state Open transitions to in this slice —
-// Forfeit and Replay (#8, #9) add the others, along with whatever they
-// require of "no prior Forfeit or Replay" (issue #6's acceptance criteria);
-// neither exists yet, so every Attempt reaching Cleared today satisfies that
-// by construction.
+// boundary intact.
 const StateCleared State = "cleared"
+
+// StateForfeited means the learner closed the Exercise explicitly without a
+// Clear (CONTEXT.md's Forfeit entry) — recorded as not cleared, visible in
+// the learner's own history rather than left open indefinitely.
+const StateForfeited State = "forfeited"
 
 // Attempt is one worked instance of an Exercise: the front matter of one
 // progress-record file. The prose body below the front matter carries its
@@ -138,6 +138,17 @@ func (s Store) Open() (Attempt, bool, error) {
 	return Attempt{}, false, nil
 }
 
+// Get returns the Attempt for exerciseID regardless of its State — the one
+// way to reach a closed Attempt, since Open only ever returns one in state
+// Open.
+func (s Store) Get(exerciseID string) (Attempt, error) {
+	raw, err := os.ReadFile(s.path(exerciseID))
+	if err != nil {
+		return Attempt{}, fmt.Errorf("reading attempt %s: %w", exerciseID, err)
+	}
+	return parseAttempt(raw)
+}
+
 // Write records a, creating the record's own git repository on first use and
 // committing the write. ADR-0004: the record is versioned, so editing it is
 // possible but never invisible.
@@ -194,6 +205,53 @@ func (s Store) AppendEntry(exerciseID string, e PathLogEntry) (int, error) {
 		return 0, err
 	}
 	return e.ProbeIndex, nil
+}
+
+// PathLog returns the Path log entries filed against the Attempt exerciseID,
+// parsed back out of its rendered prose body — the inverse of renderEntry.
+// A Debrief needs each entry's Probe index and Location claim to send to the
+// Vault boundary for near-miss evaluation (issue #8); Hypothesis and Because
+// are parsed too, for anything that later wants to show the Path log back to
+// the learner.
+func (s Store) PathLog(exerciseID string) ([]PathLogEntry, error) {
+	raw, err := os.ReadFile(s.path(exerciseID))
+	if err != nil {
+		return nil, fmt.Errorf("reading attempt %s: %w", exerciseID, err)
+	}
+	_, body, err := splitFrontMatter(raw)
+	if err != nil {
+		return nil, fmt.Errorf("attempt file for %s: %w", exerciseID, err)
+	}
+
+	var entries []PathLogEntry
+	var current *PathLogEntry
+	for line := range strings.SplitSeq(body, "\n") {
+		if rest, ok := strings.CutPrefix(line, "### Probe "); ok {
+			if current != nil {
+				entries = append(entries, *current)
+			}
+			index, _, _ := strings.Cut(rest, " — ")
+			var probe PathLogEntry
+			fmt.Sscanf(index, "%d", &probe.ProbeIndex)
+			current = &probe
+			continue
+		}
+		if current == nil {
+			continue
+		}
+		switch {
+		case strings.HasPrefix(line, "Hypothesis: "):
+			current.Hypothesis = strings.TrimPrefix(line, "Hypothesis: ")
+		case strings.HasPrefix(line, "Because: "):
+			current.Because = strings.TrimPrefix(line, "Because: ")
+		case strings.HasPrefix(line, "Location claim: "):
+			current.Location = strings.TrimPrefix(line, "Location claim: ")
+		}
+	}
+	if current != nil {
+		entries = append(entries, *current)
+	}
+	return entries, nil
 }
 
 // PauseClock stops the elapsed clock on the Attempt exerciseID, folding the
@@ -313,6 +371,42 @@ func (s Store) AppendSubmission(exerciseID string, sub Submission) (cleared bool
 		return false, err
 	}
 	return cleared, nil
+}
+
+// Forfeit closes the open Attempt exerciseID explicitly, recording it as
+// StateForfeited rather than StateCleared — visible in the learner's own
+// history as not cleared (CONTEXT.md's Forfeit entry). The elapsed clock
+// stops the same way a Clear stops it (issue #7): a closed Attempt's
+// recorded interval must not keep growing after the fact.
+func (s Store) Forfeit(exerciseID string) error {
+	raw, err := os.ReadFile(s.path(exerciseID))
+	if err != nil {
+		return fmt.Errorf("reading attempt %s: %w", exerciseID, err)
+	}
+	attempt, err := parseAttempt(raw)
+	if err != nil {
+		return fmt.Errorf("attempt file for %s: %w", exerciseID, err)
+	}
+	_, body, err := splitFrontMatter(raw)
+	if err != nil {
+		return fmt.Errorf("attempt file for %s: %w", exerciseID, err)
+	}
+
+	now := time.Now().UTC()
+	attempt.State = StateForfeited
+	if attempt.ClockRunningSince != nil {
+		attempt.ClockWorked += now.Sub(*attempt.ClockRunningSince)
+		attempt.ClockRunningSince = nil
+	}
+
+	frontMatter, err := encodeAttempt(attempt)
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(s.path(exerciseID), append(frontMatter, []byte(body)...), 0o644); err != nil {
+		return fmt.Errorf("writing attempt %s: %w", exerciseID, err)
+	}
+	return gitrepo.CommitAll(s.Dir, fmt.Sprintf("Attempt %s: Forfeited", exerciseID))
 }
 
 // renderSubmission renders sub for the Attempt file's prose body. Carries

@@ -40,6 +40,14 @@ type Grader interface {
 	Grade(tree string) (vault.Verdict, error)
 }
 
+// Debriefer judges Location claims against the Vault's near-miss bands and
+// reveals the intended path, gated on the closed flag it is passed.
+// vault.Client satisfies this, refusing with vault.ErrExerciseOpen when
+// closed is false before ever touching Docker.
+type Debriefer interface {
+	Debrief(closed bool, claims []vault.Claim) (vault.Debrief, error)
+}
+
 // SubmitResult is what Submit reports back. Deliberately impoverished — no
 // assertion text, test name, diff or path ever crosses the Vault boundary
 // (STD-009) — but enough to say whether the Exercise was Cleared and, if
@@ -198,4 +206,53 @@ func (l Loop) Submit(grader Grader) (SubmitResult, error) {
 	}
 
 	return SubmitResult{Passed: verdict.Passed, Cleared: cleared, Boundary: status}, nil
+}
+
+// Forfeit closes the open Exercise explicitly, recording it as not cleared
+// (CONTEXT.md's Forfeit entry) — a dignified exit for being stuck, visible
+// in the learner's own history rather than the Exercise sitting open
+// indefinitely.
+//
+// Refuses with ErrNoExerciseOpen if no Exercise is open.
+func (l Loop) Forfeit() (record.Attempt, error) {
+	attempt, open, err := l.Record.Open()
+	if err != nil {
+		return record.Attempt{}, err
+	}
+	if !open {
+		return record.Attempt{}, ErrNoExerciseOpen
+	}
+
+	if err := l.Record.Forfeit(attempt.ExerciseID); err != nil {
+		return record.Attempt{}, err
+	}
+	attempt.State = record.StateForfeited
+	return attempt, nil
+}
+
+// Debrief judges exerciseID's filed Location claims against debriefer and
+// returns the intended path alongside them. Which of the two endings closed
+// the Exercise makes no difference to what is revealed (CONTEXT.md's
+// Debrief entry: it follows either one) — what does is state itself, and
+// that gating is left to debriefer rather than checked here first, so it is
+// enforced at the Vault boundary's own interface and not merely by this
+// call site's care (issue #8's acceptance criteria).
+func (l Loop) Debrief(exerciseID string, debriefer Debriefer) (vault.Debrief, error) {
+	attempt, err := l.Record.Get(exerciseID)
+	if err != nil {
+		return vault.Debrief{}, err
+	}
+
+	entries, err := l.Record.PathLog(exerciseID)
+	if err != nil {
+		return vault.Debrief{}, err
+	}
+	var claims []vault.Claim
+	for _, e := range entries {
+		if e.Location != "" {
+			claims = append(claims, vault.Claim{ProbeIndex: e.ProbeIndex, Location: e.Location})
+		}
+	}
+
+	return debriefer.Debrief(attempt.State != record.StateOpen, claims)
 }
