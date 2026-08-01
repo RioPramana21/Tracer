@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"time"
 
 	"github.com/RioPramana21/Tracer/internal/agentboundary"
@@ -46,6 +47,22 @@ type Grader interface {
 // closed is false before ever touching Docker.
 type Debriefer interface {
 	Debrief(closed bool, claims []vault.Claim) (vault.Debrief, error)
+}
+
+// DebriefResult is what Loop.Debrief reports: the Vault's Debrief content,
+// plus Probes to locate and Time to locate. The two counts are Tracer's own
+// instrumentation over the learner's Path log and elapsed clock, never the
+// Vault's — neither is spoiler content (CONTEXT.md) — so they travel
+// alongside the Vault's Debrief rather than inside vault.Debrief itself.
+//
+// Both are nil if no filed Location claim ever judged Correct — an Exercise
+// can be Cleared by a fix without the learner ever having named where the
+// Cause was (CONTEXT.md's Probes to locate entry: "absent against a Clear
+// is a finding about the solve, not a gap in the record").
+type DebriefResult struct {
+	vault.Debrief
+	ProbesToLocate *int
+	TimeToLocate   *time.Duration
 }
 
 // SubmitResult is what Submit reports back. Deliberately impoverished — no
@@ -237,15 +254,15 @@ func (l Loop) Forfeit() (record.Attempt, error) {
 // that gating is left to debriefer rather than checked here first, so it is
 // enforced at the Vault boundary's own interface and not merely by this
 // call site's care (issue #8's acceptance criteria).
-func (l Loop) Debrief(exerciseID string, debriefer Debriefer) (vault.Debrief, error) {
+func (l Loop) Debrief(exerciseID string, debriefer Debriefer) (DebriefResult, error) {
 	attempt, err := l.Record.Get(exerciseID)
 	if err != nil {
-		return vault.Debrief{}, err
+		return DebriefResult{}, err
 	}
 
 	entries, err := l.Record.PathLog(exerciseID)
 	if err != nil {
-		return vault.Debrief{}, err
+		return DebriefResult{}, err
 	}
 	var claims []vault.Claim
 	for _, e := range entries {
@@ -254,5 +271,40 @@ func (l Loop) Debrief(exerciseID string, debriefer Debriefer) (vault.Debrief, er
 		}
 	}
 
-	return debriefer.Debrief(attempt.State != record.StateOpen, claims)
+	debrief, err := debriefer.Debrief(attempt.State != record.StateOpen, claims)
+	if err != nil {
+		return DebriefResult{}, err
+	}
+	result := DebriefResult{Debrief: debrief}
+
+	// The first correct claim by Probe index — Path log entries are already
+	// filed in ascending Probe order, but Claims came back from the Vault in
+	// whatever order it chose to answer them, so that ordering is not
+	// assumed here.
+	verdicts := slices.Clone(debrief.Claims)
+	slices.SortFunc(verdicts, func(a, b vault.ClaimVerdict) int { return a.ProbeIndex - b.ProbeIndex })
+	for _, c := range verdicts {
+		if c.Band != vault.CorrectBand {
+			continue
+		}
+		probes := c.ProbeIndex
+		result.ProbesToLocate = &probes
+		for _, e := range entries {
+			if e.ProbeIndex == c.ProbeIndex {
+				// FiledAt round-trips through the Attempt file at second
+				// precision (renderEntry's RFC3339 timestamp), while
+				// StartedAt keeps its original sub-second value — so an
+				// entry filed within the same second Start recorded can
+				// parse back a hair earlier. Clamped to zero rather than
+				// reported as a small negative interval, which reads only
+				// as "found immediately".
+				elapsed := max(e.FiledAt.Sub(attempt.StartedAt), 0)
+				result.TimeToLocate = &elapsed
+				break
+			}
+		}
+		break
+	}
+
+	return result, nil
 }

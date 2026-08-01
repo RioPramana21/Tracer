@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"time"
 
 	"github.com/RioPramana21/Tracer/internal/agentboundary"
 	"github.com/RioPramana21/Tracer/internal/exercise"
@@ -373,8 +374,8 @@ func runExercise(verb string, args []string, stdout, stderr io.Writer) int {
 			return 1
 		}
 
-		client := vault.Client{RepoDir: *vaultRepo, Ref: *vaultRef, Image: *vaultImage}
-		if err := client.Build(); err != nil {
+		client, err := buildVaultClient(*vaultRepo, *vaultRef, *vaultImage)
+		if err != nil {
 			fmt.Fprintf(stderr, "tracer: building the Vault image: %v\n", err)
 			return 2
 		}
@@ -446,8 +447,8 @@ func runExercise(verb string, args []string, stdout, stderr io.Writer) int {
 		}
 
 		loop := exercise.Loop{Record: record.Store{Dir: *recordDir}}
-		client := vault.Client{RepoDir: *vaultRepo, Ref: *vaultRef, Image: *vaultImage}
-		if err := client.Build(); err != nil {
+		client, err := buildVaultClient(*vaultRepo, *vaultRef, *vaultImage)
+		if err != nil {
 			fmt.Fprintf(stderr, "tracer: building the Vault image: %v\n", err)
 			return 2
 		}
@@ -468,10 +469,27 @@ func runExercise(verb string, args []string, stdout, stderr io.Writer) int {
 		for _, c := range debrief.Claims {
 			fmt.Fprintf(stdout, "  claim (probe %d) %q: %s\n", c.ProbeIndex, c.Location, c.Band)
 		}
+		if debrief.ProbesToLocate != nil {
+			fmt.Fprintf(stdout, "  Probes to locate: %d\n", *debrief.ProbesToLocate)
+		}
+		if debrief.TimeToLocate != nil {
+			fmt.Fprintf(stdout, "  Time to locate:   %s\n", debrief.TimeToLocate.Round(time.Second))
+		}
 		return 0
 
 	default:
 		fmt.Fprint(stderr, usage)
 		return 2
 	}
+}
+
+// buildVaultClient builds the Vault image from ref in repo and returns the
+// vault.Client it is run under — the construct-then-build step submit and
+// debrief both need before reaching the Vault boundary.
+func buildVaultClient(repo, ref, image string) (vault.Client, error) {
+	client := vault.Client{RepoDir: repo, Ref: ref, Image: image}
+	if err := client.Build(); err != nil {
+		return vault.Client{}, err
+	}
+	return client, nil
 }

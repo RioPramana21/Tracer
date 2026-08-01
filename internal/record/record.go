@@ -209,10 +209,10 @@ func (s Store) AppendEntry(exerciseID string, e PathLogEntry) (int, error) {
 
 // PathLog returns the Path log entries filed against the Attempt exerciseID,
 // parsed back out of its rendered prose body — the inverse of renderEntry.
-// A Debrief needs each entry's Probe index and Location claim to send to the
-// Vault boundary for near-miss evaluation (issue #8); Hypothesis and Because
-// are parsed too, for anything that later wants to show the Path log back to
-// the learner.
+// A Debrief needs each entry's Probe index, filed timestamp and Location
+// claim: the timestamp is what Time to locate measures against (issue #8).
+// Hypothesis and Because are parsed too, for anything that later wants to
+// show the Path log back to the learner.
 func (s Store) PathLog(exerciseID string) ([]PathLogEntry, error) {
 	raw, err := os.ReadFile(s.path(exerciseID))
 	if err != nil {
@@ -230,9 +230,12 @@ func (s Store) PathLog(exerciseID string) ([]PathLogEntry, error) {
 			if current != nil {
 				entries = append(entries, *current)
 			}
-			index, _, _ := strings.Cut(rest, " — ")
+			index, timestamp, _ := strings.Cut(rest, " — ")
 			var probe PathLogEntry
 			fmt.Sscanf(index, "%d", &probe.ProbeIndex)
+			if filedAt, err := time.Parse(time.RFC3339, timestamp); err == nil {
+				probe.FiledAt = filedAt
+			}
 			current = &probe
 			continue
 		}

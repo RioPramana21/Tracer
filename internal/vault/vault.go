@@ -35,7 +35,8 @@ type Claim struct {
 
 // ClaimVerdict is one Claim judged against the Vault's near-miss bands.
 // Band is authored content, never a computed similarity (CONTEXT.md's
-// Location claim entry, issue #8's acceptance criteria) — e.g. "correct",
+// Location claim entry, issue #8's acceptance criteria) — CorrectBand for a
+// hit, and otherwise whatever near-miss band the Vault authored, e.g.
 // "right-file-wrong-symbol", "right-subsystem-wrong-file", "adjacent-call",
 // or "wrong".
 type ClaimVerdict struct {
@@ -43,6 +44,13 @@ type ClaimVerdict struct {
 	Location   string `json:"location"`
 	Band       string `json:"band"`
 }
+
+// CorrectBand is the one Band value that is not a near-miss classification:
+// the claim named the Cause's actual location. Callers computing Probes to
+// locate and Time to locate (exercise.Loop.Debrief) look for this exact
+// value, so an authored Vault must use it verbatim for a hit rather than a
+// synonym.
+const CorrectBand = "correct"
 
 // Debrief is what the Vault boundary reveals after a Clear or a Forfeit —
 // never before (CONTEXT.md's Vault entry).

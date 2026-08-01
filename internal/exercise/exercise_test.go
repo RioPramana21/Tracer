@@ -39,6 +39,11 @@ func (f fakeGrader) Grade(tree string) (vault.Verdict, error) {
 type fakeDebriefer struct {
 	gotClosed bool
 	gotClaims []vault.Claim
+	// verdicts, if set, is returned verbatim as the Debrief's Claims —
+	// letting a test control which claim (if any) the Vault judges Correct
+	// (issue #8: Probes/Time to locate are Tracer's own count over that
+	// judgement, not the Vault's).
+	verdicts []vault.ClaimVerdict
 }
 
 func (f *fakeDebriefer) Debrief(closed bool, claims []vault.Claim) (vault.Debrief, error) {
@@ -47,7 +52,7 @@ func (f *fakeDebriefer) Debrief(closed bool, claims []vault.Claim) (vault.Debrie
 	if !closed {
 		return vault.Debrief{}, vault.ErrExerciseOpen
 	}
-	return vault.Debrief{IntendedPath: "the intended path", TicketSignals: "the signal"}, nil
+	return vault.Debrief{IntendedPath: "the intended path", TicketSignals: "the signal", Claims: f.verdicts}, nil
 }
 
 func runGit(t *testing.T, dir string, args ...string) {
@@ -409,5 +414,71 @@ func TestDebriefAfterAClearReportsClosedTrue(t *testing.T) {
 	}
 	if !debriefer.gotClosed {
 		t.Error("Debrief passed closed=false for a Cleared Exercise")
+	}
+}
+
+func TestDebriefReportsProbesAndTimeToLocateAgainstTheFirstCorrectClaim(t *testing.T) {
+	loop, attempt := startedLoop(t)
+	if _, err := loop.Record.AppendEntry(attempt.ExerciseID, record.PathLogEntry{
+		Hypothesis: "first guess", Because: "a reason", Location: "wrong/place",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loop.Record.AppendEntry(attempt.ExerciseID, record.PathLogEntry{
+		Hypothesis: "second guess", Because: "a better reason", Location: "internal/billing/retry",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loop.Forfeit(); err != nil {
+		t.Fatalf("Forfeit: %v", err)
+	}
+
+	debriefer := &fakeDebriefer{verdicts: []vault.ClaimVerdict{
+		{ProbeIndex: 1, Location: "wrong/place", Band: "adjacent-call"},
+		{ProbeIndex: 2, Location: "internal/billing/retry", Band: vault.CorrectBand},
+	}}
+	result, err := loop.Debrief(attempt.ExerciseID, debriefer)
+	if err != nil {
+		t.Fatalf("Debrief: %v", err)
+	}
+
+	if result.ProbesToLocate == nil {
+		t.Fatal("ProbesToLocate is nil, want the Probe index of the first correct claim")
+	}
+	if *result.ProbesToLocate != 2 {
+		t.Errorf("ProbesToLocate = %d, want 2", *result.ProbesToLocate)
+	}
+	if result.TimeToLocate == nil {
+		t.Fatal("TimeToLocate is nil, want the interval to the first correct claim")
+	}
+	if *result.TimeToLocate < 0 {
+		t.Errorf("TimeToLocate = %s, want non-negative", *result.TimeToLocate)
+	}
+}
+
+func TestDebriefReportsNoProbesOrTimeToLocateWithoutACorrectClaim(t *testing.T) {
+	loop, attempt := startedLoop(t)
+	if _, err := loop.Record.AppendEntry(attempt.ExerciseID, record.PathLogEntry{
+		Hypothesis: "a guess", Because: "a reason", Location: "wrong/place",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loop.Submit(fakeGrader{passed: true}); err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+
+	debriefer := &fakeDebriefer{verdicts: []vault.ClaimVerdict{
+		{ProbeIndex: 1, Location: "wrong/place", Band: "adjacent-call"},
+	}}
+	result, err := loop.Debrief(attempt.ExerciseID, debriefer)
+	if err != nil {
+		t.Fatalf("Debrief: %v", err)
+	}
+
+	if result.ProbesToLocate != nil {
+		t.Errorf("ProbesToLocate = %d, want nil — no claim was Correct", *result.ProbesToLocate)
+	}
+	if result.TimeToLocate != nil {
+		t.Errorf("TimeToLocate = %s, want nil — no claim was Correct", *result.TimeToLocate)
 	}
 }
