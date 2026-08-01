@@ -1,6 +1,7 @@
 package vault
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -92,6 +93,53 @@ func submissionTree(t *testing.T, repoDir, markerRef string) string {
 		t.Fatal(err)
 	}
 	return dir
+}
+
+// TestDebriefRefusesAnOpenExerciseWithoutTouchingDocker proves the refusal
+// lives at Debrief's own interface (issue #8's acceptance criteria): closed
+// is checked before Docker is ever invoked, so this needs no Docker at all —
+// unlike every other test in this file, it runs unconditionally.
+func TestDebriefRefusesAnOpenExerciseWithoutTouchingDocker(t *testing.T) {
+	// An Image that does not exist: if Debrief reached Docker at all with
+	// closed=false, this would fail with a Docker error rather than
+	// ErrExerciseOpen, exposing that the check came too late.
+	client := Client{Image: "tracer-vault-image-that-does-not-exist:test"}
+
+	_, err := client.Debrief(false, []Claim{{ProbeIndex: 1, Location: "somewhere"}})
+
+	if !errors.Is(err, ErrExerciseOpen) {
+		t.Errorf("Debrief err = %v, want ErrExerciseOpen", err)
+	}
+}
+
+func TestDebriefAgainstTheRealVaultImage(t *testing.T) {
+	requireDocker(t)
+
+	repoDir, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	repoDir = filepath.Join(repoDir, "..", "..") // internal/vault -> repo root
+
+	client := Client{
+		RepoDir: repoDir,
+		Ref:     "vault",
+		Image:   "tracer-vault-debrief-pipeline-proof:test",
+	}
+	if err := client.Build(); err != nil {
+		t.Fatalf("building the Vault image: %v", err)
+	}
+	t.Cleanup(func() {
+		exec.Command("docker", "rmi", "-f", client.Image).Run()
+	})
+
+	debrief, err := client.Debrief(true, []Claim{{ProbeIndex: 1, Location: "wherever"}})
+	if err != nil {
+		t.Fatalf("Debrief: %v", err)
+	}
+	if debrief.IntendedPath == "" {
+		t.Error("Debrief returned no intended-path narrative")
+	}
 }
 
 func refExists(t *testing.T, repoDir, ref string) bool {

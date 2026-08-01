@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"time"
 
 	"github.com/RioPramana21/Tracer/internal/agentboundary"
 	"github.com/RioPramana21/Tracer/internal/exercise"
@@ -29,6 +30,8 @@ Usage:
   tracer exercise pause   --record <dir>
   tracer exercise resume  --record <dir>
   tracer exercise submit  --record <dir> --vault-repo <repo> --vault-ref <ref> --vault-image <tag>
+  tracer exercise forfeit --record <dir>
+  tracer exercise debrief --record <dir> --exercise <id> --vault-repo <repo> --vault-ref <ref> --vault-image <tag>
 
   tracer pathlog file     --record <dir>
 
@@ -60,6 +63,16 @@ Agent boundary records a Clear; anything else leaves the Exercise open, so
 submitting again costs nothing. A failed submission reports failure only —
 no assertion text, test name, diff or path ever crosses the Vault boundary.
 
+Forfeiting closes the open Exercise explicitly and records it as not
+cleared — a dignified exit for being stuck, visible in the learner's own
+history rather than quiet cheating.
+
+Debriefing builds the Vault image the same way submit does and reveals, for
+one closed (Cleared or Forfeited) Exercise, the intended-path narrative,
+which Ticket signals should have pointed where, and each filed Location
+claim judged against its authored near-miss band. Refused for an Exercise
+that is still open, at the Vault boundary itself.
+
 Exit codes:
   0  the command succeeded — for boundary verify, the boundary is intact; for
      exercise next and exercise status, this is their only non-error outcome,
@@ -73,7 +86,8 @@ Exit codes:
      requested state), exercise submit was refused (no Exercise is open, or
      the checkout is not on the fix branch), or exercise submit ran but did
      not Clear (the hidden test failed, or the Agent boundary was not
-     intact)
+     intact), exercise forfeit was refused (no Exercise is open), or
+     exercise debrief was refused (the named Exercise is still open)
   2  the command could not be run
 `
 
@@ -360,8 +374,8 @@ func runExercise(verb string, args []string, stdout, stderr io.Writer) int {
 			return 1
 		}
 
-		client := vault.Client{RepoDir: *vaultRepo, Ref: *vaultRef, Image: *vaultImage}
-		if err := client.Build(); err != nil {
+		client, err := buildVaultClient(*vaultRepo, *vaultRef, *vaultImage)
+		if err != nil {
 			fmt.Fprintf(stderr, "tracer: building the Vault image: %v\n", err)
 			return 2
 		}
@@ -389,8 +403,93 @@ func runExercise(verb string, args []string, stdout, stderr io.Writer) int {
 		}
 		return 1
 
+	case "forfeit":
+		flags := flag.NewFlagSet("exercise forfeit", flag.ContinueOnError)
+		flags.SetOutput(stderr)
+		recordDir := flags.String("record", "", "the progress record directory")
+		if err := flags.Parse(args); err != nil {
+			return 2
+		}
+		if *recordDir == "" {
+			fmt.Fprintln(stderr, "tracer: --record is required")
+			return 2
+		}
+
+		loop := exercise.Loop{Record: record.Store{Dir: *recordDir}}
+		attempt, err := loop.Forfeit()
+		switch {
+		case errors.Is(err, exercise.ErrNoExerciseOpen):
+			fmt.Fprintln(stderr, "tracer: no Exercise is open — nothing to forfeit")
+			return 1
+		case err != nil:
+			fmt.Fprintf(stderr, "tracer: forfeiting the Exercise: %v\n", err)
+			return 2
+		}
+
+		fmt.Fprintf(stdout, "Exercise %s forfeited — not cleared\n", attempt.ExerciseID)
+		fmt.Fprintf(stdout, "  run `tracer exercise debrief --exercise %s ...` for the Debrief\n", attempt.ExerciseID)
+		return 0
+
+	case "debrief":
+		flags := flag.NewFlagSet("exercise debrief", flag.ContinueOnError)
+		flags.SetOutput(stderr)
+		recordDir := flags.String("record", "", "the progress record directory")
+		exerciseID := flags.String("exercise", "", "the closed Exercise to Debrief")
+		vaultRepo := flags.String("vault-repo", "", "the git repository the Vault ref lives in")
+		vaultRef := flags.String("vault-ref", "vault", "the orphan ref the Vault image is built from")
+		vaultImage := flags.String("vault-image", "", "the tag the Vault image is built and run under")
+		if err := flags.Parse(args); err != nil {
+			return 2
+		}
+		if *recordDir == "" || *exerciseID == "" || *vaultRepo == "" || *vaultImage == "" {
+			fmt.Fprintln(stderr, "tracer: --record, --exercise, --vault-repo and --vault-image are all required")
+			return 2
+		}
+
+		loop := exercise.Loop{Record: record.Store{Dir: *recordDir}}
+		client, err := buildVaultClient(*vaultRepo, *vaultRef, *vaultImage)
+		if err != nil {
+			fmt.Fprintf(stderr, "tracer: building the Vault image: %v\n", err)
+			return 2
+		}
+
+		debrief, err := loop.Debrief(*exerciseID, client)
+		switch {
+		case errors.Is(err, vault.ErrExerciseOpen):
+			fmt.Fprintf(stderr, "tracer: Exercise %s is still open — the Vault boundary refuses a Debrief\n", *exerciseID)
+			return 1
+		case err != nil:
+			fmt.Fprintf(stderr, "tracer: debriefing the Exercise: %v\n", err)
+			return 2
+		}
+
+		fmt.Fprintf(stdout, "Debrief for %s\n", *exerciseID)
+		fmt.Fprintf(stdout, "  intended path:  %s\n", debrief.IntendedPath)
+		fmt.Fprintf(stdout, "  ticket signals: %s\n", debrief.TicketSignals)
+		for _, c := range debrief.Claims {
+			fmt.Fprintf(stdout, "  claim (probe %d) %q: %s\n", c.ProbeIndex, c.Location, c.Band)
+		}
+		if debrief.ProbesToLocate != nil {
+			fmt.Fprintf(stdout, "  Probes to locate: %d\n", *debrief.ProbesToLocate)
+		}
+		if debrief.TimeToLocate != nil {
+			fmt.Fprintf(stdout, "  Time to locate:   %s\n", debrief.TimeToLocate.Round(time.Second))
+		}
+		return 0
+
 	default:
 		fmt.Fprint(stderr, usage)
 		return 2
 	}
+}
+
+// buildVaultClient builds the Vault image from ref in repo and returns the
+// vault.Client it is run under — the construct-then-build step submit and
+// debrief both need before reaching the Vault boundary.
+func buildVaultClient(repo, ref, image string) (vault.Client, error) {
+	client := vault.Client{RepoDir: repo, Ref: ref, Image: image}
+	if err := client.Build(); err != nil {
+		return vault.Client{}, err
+	}
+	return client, nil
 }
