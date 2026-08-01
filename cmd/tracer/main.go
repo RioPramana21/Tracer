@@ -26,6 +26,8 @@ Usage:
   tracer exercise start   --catalog <file> --record <dir> --playground <repo> --checkout <dir>
   tracer exercise status  --record <dir>
 
+  tracer pathlog file     --record <dir>
+
 The Agent boundary is armed on an Exercise checkout by writing harness deny
 rules over Playground paths, and a digest of the settings carrying them is
 recorded outside the checkout. Verifying re-derives that digest.
@@ -36,13 +38,20 @@ from the Exercise's fixed baseline into a clone of --playground at
 Attempt in the progress record at --record. Status reports the open Attempt,
 if any, and withholds Probes to locate and Time to locate while it is open.
 
+Filing a Path log entry opens $EDITOR over the open Exercise's Attempt: a
+hypothesis, a because, and an optional Location claim. Rejected if the
+because is empty. A Location claim is recorded with its Probe index and
+timestamp and answered with silence — nothing about its correctness is
+shown while the Exercise is open.
+
 Exit codes:
   0  the command succeeded — for boundary verify, the boundary is intact; for
      exercise next and exercise status, this is their only non-error outcome,
      including "nothing to report" (no Exercise left, or none open)
   1  a substantive refusal: boundary verify found the boundary lifted or
-     never armed, or exercise start was refused (an Exercise is already
-     open, or the Catalog has no Exercise left to offer)
+     never armed, exercise start was refused (an Exercise is already open, or
+     the Catalog has no Exercise left to offer), or pathlog file was refused
+     (no Exercise is open, or the because was empty)
   2  the command could not be run
 `
 
@@ -63,6 +72,8 @@ func run(args []string) int {
 		return runBoundary(args[1], args[2:], stdout, stderr)
 	case "exercise":
 		return runExercise(args[1], args[2:], stdout, stderr)
+	case "pathlog":
+		return runPathLog(args[1], args[2:], stdout, stderr)
 	default:
 		fmt.Fprint(stderr, usage)
 		return 2

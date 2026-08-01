@@ -26,8 +26,8 @@ type State string
 const StateOpen State = "open"
 
 // Attempt is one worked instance of an Exercise: the front matter of one
-// progress-record file. The prose body below the front matter — the Path
-// log — is #5's to write.
+// progress-record file. The prose body below the front matter carries its
+// Path log.
 type Attempt struct {
 	ExerciseID string    `json:"exercise_id"`
 	Ticket     string    `json:"ticket"`
@@ -38,10 +38,30 @@ type Attempt struct {
 	Checkout   string    `json:"checkout"`
 }
 
+// PathLogEntry is one filed hypothesis: what is believed and why, and
+// optionally where the Cause is believed to live. ProbeIndex and FiledAt are
+// assigned by Store.AppendEntry at the moment the entry is filed, not by the
+// caller — the Probe index is the entry's position among every entry already
+// on file for the Attempt, so it cannot be chosen or predicted ahead of time.
+type PathLogEntry struct {
+	ProbeIndex int
+	FiledAt    time.Time
+	Hypothesis string
+	Because    string
+	// Location is the Location claim's text — where the Cause is believed to
+	// live. Empty means the entry carries no claim.
+	Location string
+}
+
 // Store manages the progress record at Dir.
 type Store struct {
 	Dir string
 }
+
+// ErrBecauseRequired is returned by AppendEntry when e carries no "because".
+// The Path log's discipline — no probe without a written belief — is
+// enforced here rather than left to the caller's care.
+var ErrBecauseRequired = errors.New(`a Path log entry requires a "because"`)
 
 func (s Store) path(id string) string {
 	return filepath.Join(s.Dir, id+".md")
@@ -92,6 +112,60 @@ func (s Store) Write(a Attempt) error {
 	return gitrepo.CommitAll(s.Dir, fmt.Sprintf("Attempt %s: %s", a.ExerciseID, a.State))
 }
 
+// AppendEntry files e against the Attempt exerciseID: it is assigned the
+// next Probe index and the current time, appended to the Attempt file's
+// prose body as its Path log, and committed. Returns the assigned Probe
+// index.
+//
+// Refuses with ErrBecauseRequired, and appends nothing, if e carries no
+// "because" — the one check that is enforced rather than merely encouraged
+// (CONTEXT.md's Path log).
+func (s Store) AppendEntry(exerciseID string, e PathLogEntry) (int, error) {
+	if strings.TrimSpace(e.Because) == "" {
+		return 0, ErrBecauseRequired
+	}
+
+	raw, err := os.ReadFile(s.path(exerciseID))
+	if err != nil {
+		return 0, fmt.Errorf("reading attempt %s: %w", exerciseID, err)
+	}
+	frontMatter, body, err := splitFrontMatter(raw)
+	if err != nil {
+		return 0, fmt.Errorf("attempt file for %s: %w", exerciseID, err)
+	}
+
+	// Counts renderEntry's own heading text — the two must be changed
+	// together, since this is what makes an existing entry findable at all.
+	e.ProbeIndex = strings.Count(body, "\n### Probe ") + 1
+	e.FiledAt = time.Now().UTC()
+
+	if !strings.Contains(body, "## Path log") {
+		body += "\n## Path log\n"
+	}
+	body += "\n" + renderEntry(e)
+
+	if err := os.WriteFile(s.path(exerciseID), []byte(frontMatter+body), 0o644); err != nil {
+		return 0, fmt.Errorf("writing attempt %s: %w", exerciseID, err)
+	}
+	if err := gitrepo.CommitAll(s.Dir, fmt.Sprintf("Attempt %s: Path log probe %d", exerciseID, e.ProbeIndex)); err != nil {
+		return 0, err
+	}
+	return e.ProbeIndex, nil
+}
+
+// renderEntry's heading format is load-bearing: AppendEntry counts it back
+// out of the body to assign the next Probe index. Change the two together.
+func renderEntry(e PathLogEntry) string {
+	var buf bytes.Buffer
+	fmt.Fprintf(&buf, "### Probe %d — %s\n", e.ProbeIndex, e.FiledAt.Format(time.RFC3339))
+	fmt.Fprintf(&buf, "Hypothesis: %s\n", e.Hypothesis)
+	fmt.Fprintf(&buf, "Because: %s\n", e.Because)
+	if e.Location != "" {
+		fmt.Fprintf(&buf, "Location claim: %s\n", e.Location)
+	}
+	return buf.String()
+}
+
 func (s Store) all() ([]Attempt, error) {
 	entries, err := os.ReadDir(s.Dir)
 	if errors.Is(err, os.ErrNotExist) {
@@ -136,6 +210,23 @@ func encodeAttempt(a Attempt) ([]byte, error) {
 }
 
 func parseAttempt(raw []byte) (Attempt, error) {
+	frontMatter, _, err := splitFrontMatter(raw)
+	if err != nil {
+		return Attempt{}, err
+	}
+	// frontMatter carries the "---\n...\n---\n" delimiters; strip them back
+	// off to reach the JSON between them.
+	frontMatterJSON := strings.TrimSuffix(strings.TrimPrefix(frontMatter, "---\n"), "---\n")
+	var a Attempt
+	if err := json.Unmarshal([]byte(frontMatterJSON), &a); err != nil {
+		return Attempt{}, fmt.Errorf("front matter is not valid JSON: %w", err)
+	}
+	return a, nil
+}
+
+// splitFrontMatter separates an Attempt file's front matter — including its
+// "---" delimiters — from the prose body below it.
+func splitFrontMatter(raw []byte) (frontMatter, body string, err error) {
 	// The record is its own git repository (ADR-0004), and this machine's
 	// git can rewrite the working tree with CRLF line endings on a checkout,
 	// reset, or clone of it (core.autocrlf). Normalising first means a
@@ -144,7 +235,7 @@ func parseAttempt(raw []byte) (Attempt, error) {
 	normalized := strings.ReplaceAll(string(raw), "\r\n", "\n")
 	lines := strings.Split(normalized, "\n")
 	if len(lines) < 2 || lines[0] != "---" {
-		return Attempt{}, errors.New("does not start with a --- front matter delimiter")
+		return "", "", errors.New("does not start with a --- front matter delimiter")
 	}
 	end := -1
 	for i := 1; i < len(lines); i++ {
@@ -154,11 +245,9 @@ func parseAttempt(raw []byte) (Attempt, error) {
 		}
 	}
 	if end == -1 {
-		return Attempt{}, errors.New("front matter has no closing ---")
+		return "", "", errors.New("front matter has no closing ---")
 	}
-	var a Attempt
-	if err := json.Unmarshal([]byte(strings.Join(lines[1:end], "\n")), &a); err != nil {
-		return Attempt{}, fmt.Errorf("front matter is not valid JSON: %w", err)
-	}
-	return a, nil
+	frontMatter = strings.Join(lines[:end+1], "\n") + "\n"
+	body = strings.Join(lines[end+1:], "\n")
+	return frontMatter, body, nil
 }
