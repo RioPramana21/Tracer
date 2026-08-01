@@ -123,14 +123,18 @@ func (l Loop) Start(playgroundSrc, checkoutDir string) (record.Attempt, agentbou
 		return record.Attempt{}, agentboundary.Record{}, fmt.Errorf("arming the Agent boundary: %w", err)
 	}
 
+	startedAt := time.Now().UTC()
 	attempt := record.Attempt{
 		ExerciseID: entry.ID,
 		Ticket:     entry.Ticket,
 		State:      record.StateOpen,
-		StartedAt:  time.Now().UTC(),
+		StartedAt:  startedAt,
 		Baseline:   entry.Baseline,
 		Branch:     branch,
 		Checkout:   checkoutDir,
+		// The elapsed clock starts running immediately; Pause/ResumeClock
+		// (issue #7) explicitly stop and restart it from here.
+		ClockRunningSince: &startedAt,
 	}
 	if err := l.Record.Write(attempt); err != nil {
 		return record.Attempt{}, agentboundary.Record{}, err

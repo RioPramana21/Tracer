@@ -212,6 +212,13 @@ Exercise can be cleared by a learner who repaired the defect without ever having
 named where it was. Absent against a Clear is a finding about the solve, not a gap in the
 record.
 
+### Elapsed clock
+
+The instrument behind [[time-to-locate]]. Paused and resumed explicitly by the learner, so a
+break — dinner, sleep, a day job — enters the record as nothing rather than as time spent
+tracing. Accumulates only the intervals actually worked; withheld from every output while an
+Exercise is open, the same as [[time-to-locate]] itself.
+
 ### Debrief
 
 The retrospective that follows a [[clear]] or a [[forfeit]]: what the intended path was,
