@@ -15,6 +15,7 @@ import (
 	"github.com/RioPramana21/Tracer/internal/catalog"
 	"github.com/RioPramana21/Tracer/internal/gitrepo"
 	"github.com/RioPramana21/Tracer/internal/record"
+	"github.com/RioPramana21/Tracer/internal/vault"
 )
 
 // ErrAlreadyOpen is returned by Start when an Exercise is already open.
@@ -23,6 +24,31 @@ var ErrAlreadyOpen = errors.New("an Exercise is already open")
 // ErrCatalogExhausted is returned by Start when the Catalog has no Exercise
 // left to offer.
 var ErrCatalogExhausted = errors.New("the Catalog has no Exercise left to offer")
+
+// ErrNoExerciseOpen is returned by Submit when no Exercise is open to grade.
+var ErrNoExerciseOpen = errors.New("no Exercise is open")
+
+// ErrWrongBranch is returned by Submit when the Playground checkout is not
+// on the open Exercise's fix branch.
+var ErrWrongBranch = errors.New("the checkout is not on the Exercise's fix branch")
+
+// Grader grades a submission tree against the open Exercise's hidden test.
+// vault.Client satisfies this: production wiring passes the real Vault
+// image, and a test substitutes a fake so most of Submit's logic never
+// touches Docker (issue #1's testing decisions).
+type Grader interface {
+	Grade(tree string) (vault.Verdict, error)
+}
+
+// SubmitResult is what Submit reports back. Deliberately impoverished — no
+// assertion text, test name, diff or path ever crosses the Vault boundary
+// (STD-009) — but enough to say whether the Exercise was Cleared and, if
+// not, whether the hidden test or the Agent boundary is why.
+type SubmitResult struct {
+	Passed   bool
+	Cleared  bool
+	Boundary agentboundary.Status
+}
 
 // Loop is one learner's view of the Exercise loop: a Catalog to draw from and
 // the progress record of what they have already attempted.
@@ -115,4 +141,57 @@ func (l Loop) Start(playgroundSrc, checkoutDir string) (record.Attempt, agentbou
 // Status returns the open Attempt, if any.
 func (l Loop) Status() (record.Attempt, bool, error) {
 	return l.Record.Open()
+}
+
+// Submit grades the open Exercise's fix branch against grader and records
+// the outcome. A Passed grade with an Intact Agent boundary records a Clear;
+// a tampered or lifted boundary forecloses one even over a Passed grade.
+// Every other outcome leaves the Exercise open, so submitting again costs
+// nothing (issue #6: "submitting repeatedly costs nothing").
+//
+// Refuses with ErrNoExerciseOpen if no Exercise is open, and with
+// ErrWrongBranch if the checkout has moved off the Exercise's fix branch —
+// grading whatever tree happens to be checked out, rather than the fix
+// branch a Clear is supposed to mean, is refused rather than silently done.
+func (l Loop) Submit(grader Grader) (SubmitResult, error) {
+	attempt, open, err := l.Record.Open()
+	if err != nil {
+		return SubmitResult{}, err
+	}
+	if !open {
+		return SubmitResult{}, ErrNoExerciseOpen
+	}
+
+	playgroundDir := filepath.Join(attempt.Checkout, "Playground")
+	branch, err := gitrepo.CurrentBranch(playgroundDir)
+	if err != nil {
+		return SubmitResult{}, fmt.Errorf("checking the fix branch: %w", err)
+	}
+	if branch != attempt.Branch {
+		return SubmitResult{}, fmt.Errorf("%w: on %q, want %q", ErrWrongBranch, branch, attempt.Branch)
+	}
+
+	boundary := agentboundary.Boundary{
+		CheckoutRoot: attempt.Checkout,
+		RecordPath:   filepath.Join(l.Record.Dir, attempt.ExerciseID+".boundary.json"),
+	}
+	status, err := boundary.Verify()
+	if err != nil {
+		return SubmitResult{}, fmt.Errorf("verifying the Agent boundary: %w", err)
+	}
+
+	verdict, err := grader.Grade(playgroundDir)
+	if err != nil {
+		return SubmitResult{}, fmt.Errorf("grading the submission: %w", err)
+	}
+
+	cleared, err := l.Record.AppendSubmission(attempt.ExerciseID, record.Submission{
+		Passed:   verdict.Passed,
+		Boundary: status,
+	})
+	if err != nil {
+		return SubmitResult{}, err
+	}
+
+	return SubmitResult{Passed: verdict.Passed, Cleared: cleared, Boundary: status}, nil
 }

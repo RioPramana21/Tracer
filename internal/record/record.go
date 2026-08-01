@@ -15,15 +15,24 @@ import (
 	"strings"
 	"time"
 
+	"github.com/RioPramana21/Tracer/internal/agentboundary"
 	"github.com/RioPramana21/Tracer/internal/gitrepo"
 )
 
-// State is where an Attempt stands. Only StateOpen is reachable in this
-// slice; Clear, Forfeit and Replay (#6, #8, #9) add the rest.
+// State is where an Attempt stands. StateOpen and StateCleared are reachable
+// in this slice; Forfeit and Replay (#8, #9) add the rest.
 type State string
 
 // StateOpen means the Exercise is being worked and has not yet closed.
 const StateOpen State = "open"
+
+// StateCleared means a Submission passed the hidden test with the Agent
+// boundary intact. It is the only state Open transitions to in this slice —
+// Forfeit and Replay (#8, #9) add the others, along with whatever they
+// require of "no prior Forfeit or Replay" (issue #6's acceptance criteria);
+// neither exists yet, so every Attempt reaching Cleared today satisfies that
+// by construction.
+const StateCleared State = "cleared"
 
 // Attempt is one worked instance of an Exercise: the front matter of one
 // progress-record file. The prose body below the front matter carries its
@@ -51,6 +60,22 @@ type PathLogEntry struct {
 	// Location is the Location claim's text — where the Cause is believed to
 	// live. Empty means the entry carries no claim.
 	Location string
+}
+
+// Submission is one graded attempt against the Exercise's hidden test.
+// SubmittedAt is assigned by Store.AppendSubmission at the moment it is
+// filed, not by the caller.
+type Submission struct {
+	SubmittedAt time.Time
+	// Passed is the Vault boundary's Verdict — the hidden test's result and
+	// nothing else (STD-009).
+	Passed bool
+	// Boundary is the Agent boundary's status at submission time. Only
+	// agentboundary.Intact clears; Lifted or Unarmed is recorded here
+	// verbatim rather than collapsed to a bool, so a tampered boundary is
+	// legible in the Attempt file itself and not only in the boundary's own
+	// digest record.
+	Boundary agentboundary.Status
 }
 
 // Store manages the progress record at Dir.
@@ -151,6 +176,67 @@ func (s Store) AppendEntry(exerciseID string, e PathLogEntry) (int, error) {
 		return 0, err
 	}
 	return e.ProbeIndex, nil
+}
+
+// AppendSubmission files sub against the Attempt exerciseID: appended to the
+// Attempt file's prose body as a record of the graded attempt, and
+// committed. A Passed submission with an Intact boundary transitions the
+// Attempt to Cleared and reports cleared as true; any other outcome leaves
+// the Attempt Open and reports false, so a failed or boundary-lifted
+// submission never forecloses trying again (issue #6: "submitting
+// repeatedly costs nothing").
+func (s Store) AppendSubmission(exerciseID string, sub Submission) (cleared bool, err error) {
+	raw, err := os.ReadFile(s.path(exerciseID))
+	if err != nil {
+		return false, fmt.Errorf("reading attempt %s: %w", exerciseID, err)
+	}
+	attempt, err := parseAttempt(raw)
+	if err != nil {
+		return false, fmt.Errorf("attempt file for %s: %w", exerciseID, err)
+	}
+	_, body, err := splitFrontMatter(raw)
+	if err != nil {
+		return false, fmt.Errorf("attempt file for %s: %w", exerciseID, err)
+	}
+
+	sub.SubmittedAt = time.Now().UTC()
+	if !strings.Contains(body, "## Submissions") {
+		body += "\n## Submissions\n"
+	}
+	body += "\n" + renderSubmission(sub)
+
+	cleared = sub.Passed && sub.Boundary == agentboundary.Intact
+	if cleared {
+		attempt.State = StateCleared
+	}
+
+	frontMatter, err := encodeAttempt(attempt)
+	if err != nil {
+		return false, err
+	}
+	if err := os.WriteFile(s.path(exerciseID), append(frontMatter, []byte(body)...), 0o644); err != nil {
+		return false, fmt.Errorf("writing attempt %s: %w", exerciseID, err)
+	}
+
+	message := fmt.Sprintf("Attempt %s: submission failed", exerciseID)
+	if cleared {
+		message = fmt.Sprintf("Attempt %s: Cleared", exerciseID)
+	}
+	if err := gitrepo.CommitAll(s.Dir, message); err != nil {
+		return false, err
+	}
+	return cleared, nil
+}
+
+// renderSubmission renders sub for the Attempt file's prose body. Carries
+// only pass/fail and boundary status — never assertion text, a test name, a
+// diff or a path (STD-009).
+func renderSubmission(sub Submission) string {
+	var buf bytes.Buffer
+	fmt.Fprintf(&buf, "### Submission — %s\n", sub.SubmittedAt.Format(time.RFC3339))
+	fmt.Fprintf(&buf, "Passed: %t\n", sub.Passed)
+	fmt.Fprintf(&buf, "Agent boundary: %s\n", sub.Boundary)
+	return buf.String()
 }
 
 // renderEntry's heading format is load-bearing: AppendEntry counts it back
