@@ -19,7 +19,7 @@ import (
 	"github.com/RioPramana21/Tracer/internal/gitrepo"
 )
 
-// State is where an Attempt stands. Replay (#9) adds the rest.
+// State is where an Attempt stands.
 type State string
 
 // StateOpen means the Exercise is being worked and has not yet closed.
@@ -33,6 +33,17 @@ const StateCleared State = "cleared"
 // Clear (CONTEXT.md's Forfeit entry) — recorded as not cleared, visible in
 // the learner's own history rather than left open indefinitely.
 const StateForfeited State = "forfeited"
+
+// StateReplaying means a Forfeited Exercise is being worked again with the
+// answer known (CONTEXT.md's Replay entry). Occupies the same "one active
+// attempt" slot an open Exercise does, so Start refuses while it stands.
+const StateReplaying State = "replaying"
+
+// StateReplayed means a Replay's Submission passed the hidden test. Never
+// StateCleared — CONTEXT.md's Replay entry is explicit that a solve handed
+// its answer cannot masquerade as one that was found — but closed all the
+// same, freeing the "one active attempt" slot the same way a Clear does.
+const StateReplayed State = "replayed"
 
 // Attempt is one worked instance of an Exercise: the front matter of one
 // progress-record file. The prose body below the front matter carries its
@@ -106,8 +117,21 @@ var ErrClockAlreadyPaused = errors.New("the Exercise clock is already paused")
 // elapsed clock is already running.
 var ErrClockAlreadyRunning = errors.New("the Exercise clock is already running")
 
+// ErrNotForfeited is returned by NewReplay when exerciseID's Attempt did not
+// end in a Forfeit — only a Forfeited Exercise can be Replayed (issue #9's
+// acceptance criteria).
+var ErrNotForfeited = errors.New("the Exercise was not Forfeited")
+
 func (s Store) path(id string) string {
 	return filepath.Join(s.Dir, id+".md")
+}
+
+// replayPath is where a Replay of exerciseID's Attempt is recorded — a file
+// distinct from path(exerciseID), so a Replay can never touch the Forfeited
+// Attempt it drills (issue #9's acceptance criteria: "the forfeited
+// attempt's own record ... survive[s] the replay unchanged").
+func (s Store) replayPath(exerciseID string) string {
+	return filepath.Join(s.Dir, exerciseID+".replay.md")
 }
 
 // Used reports the Exercise ids with an Attempt on file, regardless of how
@@ -140,13 +164,74 @@ func (s Store) Open() (Attempt, bool, error) {
 
 // Get returns the Attempt for exerciseID regardless of its State — the one
 // way to reach a closed Attempt, since Open only ever returns one in state
-// Open.
+// Open. Always the original Attempt — a Replay is recorded separately
+// (replayPath) and is never what Get returns, so a Replay can never shadow
+// the Forfeited Attempt it drills.
 func (s Store) Get(exerciseID string) (Attempt, error) {
 	raw, err := os.ReadFile(s.path(exerciseID))
 	if err != nil {
 		return Attempt{}, fmt.Errorf("reading attempt %s: %w", exerciseID, err)
 	}
 	return parseAttempt(raw)
+}
+
+// OpenOrReplaying returns the one Attempt that is either Open or Replaying —
+// the "currently active" attempt, whichever kind it is. Submit and Start's
+// "already active" check both use this rather than Open alone, since a
+// Replay (issue #9) occupies the same one-active-attempt slot an open
+// Exercise does.
+func (s Store) OpenOrReplaying() (Attempt, bool, error) {
+	attempts, err := s.all()
+	if err != nil {
+		return Attempt{}, false, err
+	}
+	for _, a := range attempts {
+		if a.State == StateOpen || a.State == StateReplaying {
+			return a, true, nil
+		}
+	}
+	return Attempt{}, false, nil
+}
+
+// NewReplay starts a Replay of exerciseID's Forfeited Attempt: a new Attempt,
+// recorded at replayPath rather than path(exerciseID), so the Forfeited
+// Attempt it drills is never touched (issue #9's acceptance criteria). Carries
+// no elapsed-clock fields — a Replay produces no Time to locate, because
+// there is no search once the answer is known (CONTEXT.md's Replay entry).
+//
+// Refuses with ErrNotForfeited if exerciseID's Attempt is not StateForfeited.
+func (s Store) NewReplay(exerciseID string) (Attempt, error) {
+	forfeited, err := s.Get(exerciseID)
+	if err != nil {
+		return Attempt{}, err
+	}
+	if forfeited.State != StateForfeited {
+		return Attempt{}, fmt.Errorf("%w: %s is recorded as %s", ErrNotForfeited, exerciseID, forfeited.State)
+	}
+
+	replay := Attempt{
+		ExerciseID: exerciseID,
+		Ticket:     forfeited.Ticket,
+		State:      StateReplaying,
+		StartedAt:  time.Now().UTC(),
+		Baseline:   forfeited.Baseline,
+		Branch:     forfeited.Branch,
+		Checkout:   forfeited.Checkout,
+	}
+	if err := gitrepo.EnsureRepo(s.Dir); err != nil {
+		return Attempt{}, err
+	}
+	encoded, err := encodeAttempt(replay)
+	if err != nil {
+		return Attempt{}, err
+	}
+	if err := os.WriteFile(s.replayPath(exerciseID), encoded, 0o644); err != nil {
+		return Attempt{}, fmt.Errorf("writing replay attempt %s: %w", exerciseID, err)
+	}
+	if err := gitrepo.CommitAll(s.Dir, fmt.Sprintf("Attempt %s: Replay started", exerciseID)); err != nil {
+		return Attempt{}, err
+	}
+	return replay, nil
 }
 
 // Write records a, creating the record's own git repository on first use and
@@ -328,7 +413,28 @@ func (s Store) updateClock(exerciseID, verb string, mutate func(a *Attempt, now 
 // submission never forecloses trying again (issue #6: "submitting
 // repeatedly costs nothing").
 func (s Store) AppendSubmission(exerciseID string, sub Submission) (cleared bool, err error) {
-	raw, err := os.ReadFile(s.path(exerciseID))
+	return s.appendSubmission(s.path(exerciseID), exerciseID, sub, true)
+}
+
+// AppendReplaySubmission is AppendSubmission's Replay counterpart: it grades
+// against exerciseID's Replay attempt (replayPath) rather than the Forfeited
+// Attempt it drills, and a Passed grade never Clears — CONTEXT.md's Replay
+// entry is explicit that "a solve handed its answer cannot masquerade as one
+// that was found" (issue #9's acceptance criteria). A Passed grade still
+// closes the Replay, out of StateReplaying into StateReplayed, freeing the
+// one-active-attempt slot the same way a Clear frees it; a failing grade
+// leaves it Replaying, open to another try the same way a failed ordinary
+// Submission is.
+func (s Store) AppendReplaySubmission(exerciseID string, sub Submission) error {
+	_, err := s.appendSubmission(s.replayPath(exerciseID), exerciseID, sub, false)
+	return err
+}
+
+// appendSubmission is AppendSubmission and AppendReplaySubmission's shared
+// implementation. clearable is false for a Replay: a Passed submission still
+// closes the Attempt, but into StateReplayed rather than StateCleared.
+func (s Store) appendSubmission(path, exerciseID string, sub Submission, clearable bool) (cleared bool, err error) {
+	raw, err := os.ReadFile(path)
 	if err != nil {
 		return false, fmt.Errorf("reading attempt %s: %w", exerciseID, err)
 	}
@@ -347,28 +453,35 @@ func (s Store) AppendSubmission(exerciseID string, sub Submission) (cleared bool
 	}
 	body += "\n" + renderSubmission(sub)
 
-	cleared = sub.Passed && sub.Boundary == agentboundary.Intact
-	if cleared {
+	cleared = clearable && sub.Passed && sub.Boundary == agentboundary.Intact
+	closes := cleared || (!clearable && sub.Passed)
+	switch {
+	case cleared:
 		attempt.State = StateCleared
-		// The Exercise is closing, so the clock stops with it — a Cleared
+	case closes:
+		attempt.State = StateReplayed
+	}
+	if closes && attempt.ClockRunningSince != nil {
+		// The Attempt is closing, so the clock stops with it — a closed
 		// Attempt's recorded interval must not keep growing after the fact.
-		if attempt.ClockRunningSince != nil {
-			attempt.ClockWorked += sub.SubmittedAt.Sub(*attempt.ClockRunningSince)
-			attempt.ClockRunningSince = nil
-		}
+		attempt.ClockWorked += sub.SubmittedAt.Sub(*attempt.ClockRunningSince)
+		attempt.ClockRunningSince = nil
 	}
 
 	frontMatter, err := encodeAttempt(attempt)
 	if err != nil {
 		return false, err
 	}
-	if err := os.WriteFile(s.path(exerciseID), append(frontMatter, []byte(body)...), 0o644); err != nil {
+	if err := os.WriteFile(path, append(frontMatter, []byte(body)...), 0o644); err != nil {
 		return false, fmt.Errorf("writing attempt %s: %w", exerciseID, err)
 	}
 
 	message := fmt.Sprintf("Attempt %s: submission failed", exerciseID)
-	if cleared {
+	switch {
+	case cleared:
 		message = fmt.Sprintf("Attempt %s: Cleared", exerciseID)
+	case closes:
+		message = fmt.Sprintf("Attempt %s: Replayed", exerciseID)
 	}
 	if err := gitrepo.CommitAll(s.Dir, message); err != nil {
 		return false, err

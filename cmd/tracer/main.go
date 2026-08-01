@@ -32,6 +32,7 @@ Usage:
   tracer exercise submit  --record <dir> --vault-repo <repo> --vault-ref <ref> --vault-image <tag>
   tracer exercise forfeit --record <dir>
   tracer exercise debrief --record <dir> --exercise <id> --vault-repo <repo> --vault-ref <ref> --vault-image <tag>
+  tracer exercise replay  --record <dir> --exercise <id>
 
   tracer pathlog file     --record <dir>
 
@@ -73,6 +74,15 @@ which Ticket signals should have pointed where, and each filed Location
 claim judged against its authored near-miss band. Refused for an Exercise
 that is still open, at the Vault boundary itself.
 
+Replaying a Forfeited Exercise resets its fix branch back to the baseline
+and records a new Attempt distinct from the Forfeited one, so the intended
+path can be executed while the Debrief is fresh. Occupies the same
+one-active-attempt slot an open Exercise does — start and submit both refuse
+while a Replay is active. A submission graded during a Replay is never a
+Clear, and no Path log entry can be filed against it (pathlog file requires
+an Attempt in state open), so a Replay carries no Probes to locate or Time
+to locate.
+
 Exit codes:
   0  the command succeeded — for boundary verify, the boundary is intact; for
      exercise next and exercise status, this is their only non-error outcome,
@@ -87,7 +97,9 @@ Exit codes:
      the checkout is not on the fix branch), or exercise submit ran but did
      not Clear (the hidden test failed, or the Agent boundary was not
      intact), exercise forfeit was refused (no Exercise is open), or
-     exercise debrief was refused (the named Exercise is still open)
+     exercise debrief was refused (the named Exercise is still open), or
+     exercise replay was refused (an Exercise or Replay is already active, or
+     the named Exercise was not Forfeited)
   2  the command could not be run
 `
 
@@ -271,7 +283,11 @@ func runExercise(verb string, args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintln(stdout, "No Exercise is open.")
 			return 0
 		}
-		fmt.Fprintf(stdout, "Exercise %s is open\n", attempt.ExerciseID)
+		state := "open"
+		if attempt.State == record.StateReplaying {
+			state = "being replayed"
+		}
+		fmt.Fprintf(stdout, "Exercise %s is %s\n", attempt.ExerciseID, state)
 		fmt.Fprintf(stdout, "  ticket:   %s\n", attempt.Ticket)
 		fmt.Fprintf(stdout, "  branch:   %s\n", attempt.Branch)
 		fmt.Fprintf(stdout, "  checkout: %s\n", attempt.Checkout)
@@ -475,6 +491,39 @@ func runExercise(verb string, args []string, stdout, stderr io.Writer) int {
 		if debrief.TimeToLocate != nil {
 			fmt.Fprintf(stdout, "  Time to locate:   %s\n", debrief.TimeToLocate.Round(time.Second))
 		}
+		return 0
+
+	case "replay":
+		flags := flag.NewFlagSet("exercise replay", flag.ContinueOnError)
+		flags.SetOutput(stderr)
+		recordDir := flags.String("record", "", "the progress record directory")
+		exerciseID := flags.String("exercise", "", "the Forfeited Exercise to Replay")
+		if err := flags.Parse(args); err != nil {
+			return 2
+		}
+		if *recordDir == "" || *exerciseID == "" {
+			fmt.Fprintln(stderr, "tracer: --record and --exercise are required")
+			return 2
+		}
+
+		loop := exercise.Loop{Record: record.Store{Dir: *recordDir}}
+		attempt, err := loop.Replay(*exerciseID)
+		switch {
+		case errors.Is(err, exercise.ErrAlreadyOpen):
+			fmt.Fprintln(stderr, "tracer: an Exercise or Replay is already active — replay refused")
+			return 1
+		case errors.Is(err, record.ErrNotForfeited):
+			fmt.Fprintf(stderr, "tracer: %v — replay refused\n", err)
+			return 1
+		case err != nil:
+			fmt.Fprintf(stderr, "tracer: replaying the Exercise: %v\n", err)
+			return 2
+		}
+
+		fmt.Fprintf(stdout, "Exercise %s replaying — the fix branch reset to the baseline\n", attempt.ExerciseID)
+		fmt.Fprintf(stdout, "  branch:   %s\n", attempt.Branch)
+		fmt.Fprintf(stdout, "  checkout: %s\n", attempt.Checkout)
+		fmt.Fprintln(stdout, "  a Replay is recorded but never Clears — no Probes or Time to locate is tracked")
 		return 0
 
 	default:

@@ -28,6 +28,18 @@ func CreateBranch(repoDir, branch, ref string) error {
 	return run(repoDir, "checkout", "-b", branch, ref)
 }
 
+// ResetBranch checks out branch inside repoDir and hard-resets it to ref,
+// discarding whatever the branch accumulated since. Replay (issue #9) uses
+// this to reset a Forfeited Exercise's fix branch back to its baseline so it
+// can be worked again from the same starting point CreateBranch first cut it
+// from.
+func ResetBranch(repoDir, branch, ref string) error {
+	if err := run(repoDir, "checkout", branch); err != nil {
+		return err
+	}
+	return run(repoDir, "reset", "--hard", ref)
+}
+
 // CurrentBranch reports the branch checked out in repoDir.
 func CurrentBranch(repoDir string) (string, error) {
 	cmd := exec.Command("git", "-C", repoDir, "rev-parse", "--abbrev-ref", "HEAD")
