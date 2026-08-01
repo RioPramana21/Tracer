@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 )
 
 // Clone clones src into dst with full history, so the clone carries the
@@ -25,6 +26,18 @@ func Clone(src, dst string) error {
 // Clone does, is what puts it there.
 func CreateBranch(repoDir, branch, ref string) error {
 	return run(repoDir, "checkout", "-b", branch, ref)
+}
+
+// CurrentBranch reports the branch checked out in repoDir.
+func CurrentBranch(repoDir string) (string, error) {
+	cmd := exec.Command("git", "-C", repoDir, "rev-parse", "--abbrev-ref", "HEAD")
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return "", fmt.Errorf("git rev-parse --abbrev-ref HEAD: %w: %s", err, stderr.String())
+	}
+	return strings.TrimSpace(stdout.String()), nil
 }
 
 // EnsureRepo makes dir a git repository if it is not already one. Idempotent:

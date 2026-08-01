@@ -13,6 +13,7 @@ import (
 	"github.com/RioPramana21/Tracer/internal/agentboundary"
 	"github.com/RioPramana21/Tracer/internal/exercise"
 	"github.com/RioPramana21/Tracer/internal/record"
+	"github.com/RioPramana21/Tracer/internal/vault"
 )
 
 const usage = `tracer — the Exercise loop
@@ -25,6 +26,7 @@ Usage:
   tracer exercise next    --catalog <file> --record <dir>
   tracer exercise start   --catalog <file> --record <dir> --playground <repo> --checkout <dir>
   tracer exercise status  --record <dir>
+  tracer exercise submit  --record <dir> --vault-repo <repo> --vault-ref <ref> --vault-image <tag>
 
   tracer pathlog file     --record <dir>
 
@@ -44,14 +46,24 @@ because is empty. A Location claim is recorded with its Probe index and
 timestamp and answered with silence — nothing about its correctness is
 shown while the Exercise is open.
 
+Submitting builds the Vault image from --vault-ref in --vault-repo and grades
+the open Exercise's fix branch against it. A passing grade with an intact
+Agent boundary records a Clear; anything else leaves the Exercise open, so
+submitting again costs nothing. A failed submission reports failure only —
+no assertion text, test name, diff or path ever crosses the Vault boundary.
+
 Exit codes:
   0  the command succeeded — for boundary verify, the boundary is intact; for
      exercise next and exercise status, this is their only non-error outcome,
-     including "nothing to report" (no Exercise left, or none open)
+     including "nothing to report" (no Exercise left, or none open); for
+     exercise submit, the Exercise was Cleared
   1  a substantive refusal: boundary verify found the boundary lifted or
      never armed, exercise start was refused (an Exercise is already open, or
-     the Catalog has no Exercise left to offer), or pathlog file was refused
-     (no Exercise is open, or the because was empty)
+     the Catalog has no Exercise left to offer), pathlog file was refused (no
+     Exercise is open, or the because was empty), exercise submit was
+     refused (no Exercise is open, or the checkout is not on the fix
+     branch), or exercise submit ran but did not Clear (the hidden test
+     failed, or the Agent boundary was not intact)
   2  the command could not be run
 `
 
@@ -241,6 +253,63 @@ func runExercise(verb string, args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stdout, "  checkout: %s\n", attempt.Checkout)
 		fmt.Fprintf(stdout, "  started:  %s\n", attempt.StartedAt.Format("2006-01-02 15:04:05 MST"))
 		return 0
+
+	case "submit":
+		flags := flag.NewFlagSet("exercise submit", flag.ContinueOnError)
+		flags.SetOutput(stderr)
+		recordDir := flags.String("record", "", "the progress record directory")
+		vaultRepo := flags.String("vault-repo", "", "the git repository the Vault ref lives in")
+		vaultRef := flags.String("vault-ref", "vault", "the orphan ref the Vault image is built from")
+		vaultImage := flags.String("vault-image", "", "the tag the Vault image is built and run under")
+		if err := flags.Parse(args); err != nil {
+			return 2
+		}
+		if *recordDir == "" || *vaultRepo == "" || *vaultImage == "" {
+			fmt.Fprintln(stderr, "tracer: --record, --vault-repo and --vault-image are all required")
+			return 2
+		}
+
+		loop := exercise.Loop{Record: record.Store{Dir: *recordDir}}
+
+		// Checked before the Vault image is built, so refusing costs no
+		// Docker invocation — the same "refusal leaves no partial state"
+		// shape Start already follows.
+		if _, open, err := loop.Status(); err != nil {
+			fmt.Fprintf(stderr, "tracer: reading Exercise status: %v\n", err)
+			return 2
+		} else if !open {
+			fmt.Fprintln(stderr, "tracer: no Exercise is open — nothing to submit")
+			return 1
+		}
+
+		client := vault.Client{RepoDir: *vaultRepo, Ref: *vaultRef, Image: *vaultImage}
+		if err := client.Build(); err != nil {
+			fmt.Fprintf(stderr, "tracer: building the Vault image: %v\n", err)
+			return 2
+		}
+
+		result, err := loop.Submit(client)
+		switch {
+		case errors.Is(err, exercise.ErrNoExerciseOpen):
+			fmt.Fprintln(stderr, "tracer: no Exercise is open — nothing to submit")
+			return 1
+		case errors.Is(err, exercise.ErrWrongBranch):
+			fmt.Fprintf(stderr, "tracer: %v — submit refused\n", err)
+			return 1
+		case err != nil:
+			fmt.Fprintf(stderr, "tracer: submitting the fix: %v\n", err)
+			return 2
+		}
+
+		if result.Cleared {
+			fmt.Fprintln(stdout, "Cleared — the hidden test passed with the Agent boundary intact")
+			return 0
+		}
+		fmt.Fprintln(stdout, "Not cleared")
+		if result.Boundary != agentboundary.Intact {
+			fmt.Fprintf(stdout, "  Agent boundary: %s\n", result.Boundary)
+		}
+		return 1
 
 	default:
 		fmt.Fprint(stderr, usage)
