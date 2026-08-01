@@ -18,19 +18,30 @@ import (
 
 var tracerBin string
 
+// stubEditorBin stands in for $EDITOR in pathlog tests (pathlog_test.go) —
+// see cmd/tracer/testdata/stubeditor.
+var stubEditorBin string
+
 func TestMain(m *testing.M) {
 	dir, err := os.MkdirTemp("", "tracer-bin")
 	if err != nil {
 		panic(err)
 	}
 	tracerBin = filepath.Join(dir, "tracer")
+	stubEditorBin = filepath.Join(dir, "stubeditor")
 	if runtime.GOOS == "windows" {
 		tracerBin += ".exe"
+		stubEditorBin += ".exe"
 	}
 	build := exec.Command("go", "build", "-o", tracerBin, ".")
 	if out, err := build.CombinedOutput(); err != nil {
 		os.RemoveAll(dir)
 		panic("building tracer: " + err.Error() + "\n" + string(out))
+	}
+	buildStubEditor := exec.Command("go", "build", "-o", stubEditorBin, "./testdata/stubeditor")
+	if out, err := buildStubEditor.CombinedOutput(); err != nil {
+		os.RemoveAll(dir)
+		panic("building stubeditor: " + err.Error() + "\n" + string(out))
 	}
 	code := m.Run()
 	os.RemoveAll(dir)
