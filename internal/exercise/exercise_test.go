@@ -189,6 +189,62 @@ func TestSubmitWithALiftedBoundaryForecloseAClearEvenOverAPass(t *testing.T) {
 	}
 }
 
+// attemptClockFields reads the clock fields straight out of the Attempt
+// file's front matter — record.Store has no getter for a closed Attempt
+// (Open only returns one in state Open), and this is the one place that
+// needs to see behind the Clear (issue #7: the recorded interval must stop
+// growing once the Exercise closes).
+func attemptClockFields(t *testing.T, recordDir, exerciseID string) (workedNanos int64, running bool) {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join(recordDir, exerciseID+".md"))
+	if err != nil {
+		t.Fatalf("reading attempt file: %v", err)
+	}
+	content := strings.ReplaceAll(string(raw), "\r\n", "\n")
+	lines := strings.Split(content, "\n")
+	if len(lines) < 2 || lines[0] != "---" {
+		t.Fatalf("attempt file does not start with front matter: %q", content)
+	}
+	end := -1
+	for i := 1; i < len(lines); i++ {
+		if lines[i] == "---" {
+			end = i
+			break
+		}
+	}
+	if end == -1 {
+		t.Fatalf("attempt file front matter has no closing ---: %q", content)
+	}
+	var fm struct {
+		ClockWorked       int64   `json:"clock_worked"`
+		ClockRunningSince *string `json:"clock_running_since"`
+	}
+	if err := json.Unmarshal([]byte(strings.Join(lines[1:end], "\n")), &fm); err != nil {
+		t.Fatalf("attempt front matter is not valid JSON: %v", err)
+	}
+	return fm.ClockWorked, fm.ClockRunningSince != nil
+}
+
+func TestSubmitClearingStopsTheElapsedClock(t *testing.T) {
+	loop, attempt := startedLoop(t)
+
+	if _, running := attemptClockFields(t, loop.Record.Dir, attempt.ExerciseID); !running {
+		t.Fatal("sanity check failed: the clock is not recorded as running right after Start")
+	}
+
+	if _, err := loop.Submit(fakeGrader{passed: true}); err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+
+	worked, running := attemptClockFields(t, loop.Record.Dir, attempt.ExerciseID)
+	if running {
+		t.Error("the clock is still recorded as running after a Clear")
+	}
+	if worked <= 0 {
+		t.Error("no worked interval was recorded across the Clear")
+	}
+}
+
 func TestSubmitRefusesWhenNoExerciseIsOpen(t *testing.T) {
 	loop := Loop{Record: record.Store{Dir: filepath.Join(t.TempDir(), "record")}}
 

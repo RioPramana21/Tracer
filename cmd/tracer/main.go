@@ -26,6 +26,8 @@ Usage:
   tracer exercise next    --catalog <file> --record <dir>
   tracer exercise start   --catalog <file> --record <dir> --playground <repo> --checkout <dir>
   tracer exercise status  --record <dir>
+  tracer exercise pause   --record <dir>
+  tracer exercise resume  --record <dir>
   tracer exercise submit  --record <dir> --vault-repo <repo> --vault-ref <ref> --vault-image <tag>
 
   tracer pathlog file     --record <dir>
@@ -39,6 +41,12 @@ from the Exercise's fixed baseline into a clone of --playground at
 <checkout>/Playground, arms the Agent boundary over --checkout, and opens an
 Attempt in the progress record at --record. Status reports the open Attempt,
 if any, and withholds Probes to locate and Time to locate while it is open.
+
+The elapsed clock starts running when an Exercise starts and accumulates
+only worked intervals: pause and resume it explicitly, and the state
+survives across separate invocations. Neither Probes to locate nor Time to
+locate is shown by any command while the Exercise is open — the accumulated
+interval is recorded in the Attempt file for later reporting only.
 
 Filing a Path log entry opens $EDITOR over the open Exercise's Attempt: a
 hypothesis, a because, and an optional Location claim. Rejected if the
@@ -60,10 +68,12 @@ Exit codes:
   1  a substantive refusal: boundary verify found the boundary lifted or
      never armed, exercise start was refused (an Exercise is already open, or
      the Catalog has no Exercise left to offer), pathlog file was refused (no
-     Exercise is open, or the because was empty), exercise submit was
-     refused (no Exercise is open, or the checkout is not on the fix
-     branch), or exercise submit ran but did not Clear (the hidden test
-     failed, or the Agent boundary was not intact)
+     Exercise is open, or the because was empty), exercise pause or resume
+     was refused (no Exercise is open, or the clock was already in the
+     requested state), exercise submit was refused (no Exercise is open, or
+     the checkout is not on the fix branch), or exercise submit ran but did
+     not Clear (the hidden test failed, or the Agent boundary was not
+     intact)
   2  the command could not be run
 `
 
@@ -252,6 +262,74 @@ func runExercise(verb string, args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stdout, "  branch:   %s\n", attempt.Branch)
 		fmt.Fprintf(stdout, "  checkout: %s\n", attempt.Checkout)
 		fmt.Fprintf(stdout, "  started:  %s\n", attempt.StartedAt.Format("2006-01-02 15:04:05 MST"))
+		return 0
+
+	case "pause":
+		flags := flag.NewFlagSet("exercise pause", flag.ContinueOnError)
+		flags.SetOutput(stderr)
+		recordDir := flags.String("record", "", "the progress record directory")
+		if err := flags.Parse(args); err != nil {
+			return 2
+		}
+		if *recordDir == "" {
+			fmt.Fprintln(stderr, "tracer: --record is required")
+			return 2
+		}
+
+		store := record.Store{Dir: *recordDir}
+		attempt, open, err := store.Open()
+		if err != nil {
+			fmt.Fprintf(stderr, "tracer: reading Exercise status: %v\n", err)
+			return 2
+		}
+		if !open {
+			fmt.Fprintln(stderr, "tracer: no Exercise is open — nothing to pause")
+			return 1
+		}
+
+		switch err := store.PauseClock(attempt.ExerciseID); {
+		case errors.Is(err, record.ErrClockAlreadyPaused):
+			fmt.Fprintln(stderr, "tracer: the Exercise clock is already paused")
+			return 1
+		case err != nil:
+			fmt.Fprintf(stderr, "tracer: pausing the Exercise clock: %v\n", err)
+			return 2
+		}
+		fmt.Fprintln(stdout, "Exercise clock paused")
+		return 0
+
+	case "resume":
+		flags := flag.NewFlagSet("exercise resume", flag.ContinueOnError)
+		flags.SetOutput(stderr)
+		recordDir := flags.String("record", "", "the progress record directory")
+		if err := flags.Parse(args); err != nil {
+			return 2
+		}
+		if *recordDir == "" {
+			fmt.Fprintln(stderr, "tracer: --record is required")
+			return 2
+		}
+
+		store := record.Store{Dir: *recordDir}
+		attempt, open, err := store.Open()
+		if err != nil {
+			fmt.Fprintf(stderr, "tracer: reading Exercise status: %v\n", err)
+			return 2
+		}
+		if !open {
+			fmt.Fprintln(stderr, "tracer: no Exercise is open — nothing to resume")
+			return 1
+		}
+
+		switch err := store.ResumeClock(attempt.ExerciseID); {
+		case errors.Is(err, record.ErrClockAlreadyRunning):
+			fmt.Fprintln(stderr, "tracer: the Exercise clock is already running")
+			return 1
+		case err != nil:
+			fmt.Fprintf(stderr, "tracer: resuming the Exercise clock: %v\n", err)
+			return 2
+		}
+		fmt.Fprintln(stdout, "Exercise clock resumed")
 		return 0
 
 	case "submit":

@@ -45,6 +45,16 @@ type Attempt struct {
 	Baseline   string    `json:"baseline"`
 	Branch     string    `json:"branch"`
 	Checkout   string    `json:"checkout"`
+	// ClockRunningSince is when the elapsed clock most recently started
+	// running; nil while paused. Never shown in any output while the
+	// Exercise is open (issue #7) — it exists only so Pause/ResumeClock can
+	// fold the running interval into ClockWorked.
+	ClockRunningSince *time.Time `json:"clock_running_since,omitempty"`
+	// ClockWorked is the accumulated elapsed time from every finished worked
+	// interval; the interval currently running, if any, is not yet folded
+	// in. Recorded for later reporting (Time to locate), never displayed
+	// while the Exercise is open.
+	ClockWorked time.Duration `json:"clock_worked"`
 }
 
 // PathLogEntry is one filed hypothesis: what is believed and why, and
@@ -87,6 +97,14 @@ type Store struct {
 // The Path log's discipline — no probe without a written belief — is
 // enforced here rather than left to the caller's care.
 var ErrBecauseRequired = errors.New(`a Path log entry requires a "because"`)
+
+// ErrClockAlreadyPaused is returned by PauseClock when the Attempt's elapsed
+// clock is not currently running.
+var ErrClockAlreadyPaused = errors.New("the Exercise clock is already paused")
+
+// ErrClockAlreadyRunning is returned by ResumeClock when the Attempt's
+// elapsed clock is already running.
+var ErrClockAlreadyRunning = errors.New("the Exercise clock is already running")
 
 func (s Store) path(id string) string {
 	return filepath.Join(s.Dir, id+".md")
@@ -178,6 +196,69 @@ func (s Store) AppendEntry(exerciseID string, e PathLogEntry) (int, error) {
 	return e.ProbeIndex, nil
 }
 
+// PauseClock stops the elapsed clock on the Attempt exerciseID, folding the
+// interval since it last started running into ClockWorked so pausing and
+// resuming across separate invocations accumulates only worked intervals
+// (issue #7).
+//
+// Refuses with ErrClockAlreadyPaused if the clock is not currently running.
+func (s Store) PauseClock(exerciseID string) error {
+	return s.updateClock(exerciseID, "paused", func(a *Attempt, now time.Time) error {
+		if a.ClockRunningSince == nil {
+			return ErrClockAlreadyPaused
+		}
+		a.ClockWorked += now.Sub(*a.ClockRunningSince)
+		a.ClockRunningSince = nil
+		return nil
+	})
+}
+
+// ResumeClock restarts the elapsed clock on the Attempt exerciseID.
+//
+// Refuses with ErrClockAlreadyRunning if the clock is already running.
+func (s Store) ResumeClock(exerciseID string) error {
+	return s.updateClock(exerciseID, "resumed", func(a *Attempt, now time.Time) error {
+		if a.ClockRunningSince != nil {
+			return ErrClockAlreadyRunning
+		}
+		a.ClockRunningSince = &now
+		return nil
+	})
+}
+
+// updateClock reads the Attempt exerciseID, applies mutate, and writes and
+// commits the result. mutate's error — ErrClockAlreadyPaused or
+// ErrClockAlreadyRunning — is returned unchanged and nothing is written, the
+// same refuse-before-writing shape AppendEntry follows for
+// ErrBecauseRequired.
+func (s Store) updateClock(exerciseID, verb string, mutate func(a *Attempt, now time.Time) error) error {
+	raw, err := os.ReadFile(s.path(exerciseID))
+	if err != nil {
+		return fmt.Errorf("reading attempt %s: %w", exerciseID, err)
+	}
+	attempt, err := parseAttempt(raw)
+	if err != nil {
+		return fmt.Errorf("attempt file for %s: %w", exerciseID, err)
+	}
+	_, body, err := splitFrontMatter(raw)
+	if err != nil {
+		return fmt.Errorf("attempt file for %s: %w", exerciseID, err)
+	}
+
+	if err := mutate(&attempt, time.Now().UTC()); err != nil {
+		return err
+	}
+
+	frontMatter, err := encodeAttempt(attempt)
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(s.path(exerciseID), append(frontMatter, []byte(body)...), 0o644); err != nil {
+		return fmt.Errorf("writing attempt %s: %w", exerciseID, err)
+	}
+	return gitrepo.CommitAll(s.Dir, fmt.Sprintf("Attempt %s: clock %s", exerciseID, verb))
+}
+
 // AppendSubmission files sub against the Attempt exerciseID: appended to the
 // Attempt file's prose body as a record of the graded attempt, and
 // committed. A Passed submission with an Intact boundary transitions the
@@ -208,6 +289,12 @@ func (s Store) AppendSubmission(exerciseID string, sub Submission) (cleared bool
 	cleared = sub.Passed && sub.Boundary == agentboundary.Intact
 	if cleared {
 		attempt.State = StateCleared
+		// The Exercise is closing, so the clock stops with it — a Cleared
+		// Attempt's recorded interval must not keep growing after the fact.
+		if attempt.ClockRunningSince != nil {
+			attempt.ClockWorked += sub.SubmittedAt.Sub(*attempt.ClockRunningSince)
+			attempt.ClockRunningSince = nil
+		}
 	}
 
 	frontMatter, err := encodeAttempt(attempt)
